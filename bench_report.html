@@ -1,0 +1,492 @@
+<title>Qwen3.8-27B Speculative Decoding Benchmark</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  --surface-1:      #fcfcfb;
+  --page:           #f9f9f7;
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #898781;
+  --grid:           #e1e0d9;
+  --axis:           #c3c2b7;
+  --border:         rgba(11,11,11,0.10);
+  --series-spec:    #2a78d6;
+  --series-nospec:  #eb6834;
+  --depth-1024:     #2a78d6;
+  --depth-4096:     #eb6834;
+  --depth-16384:    #1baf7a;
+  --depth-65536:    #eda100;
+  --good:           #0ca30c;
+  --warn-bg:        #fdf3e0;
+  --warn-border:    #eda100;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --axis:           #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-spec:    #3987e5;
+    --series-nospec:  #d95926;
+    --depth-1024:     #3987e5;
+    --depth-4096:     #d95926;
+    --depth-16384:    #199e70;
+    --depth-65536:    #c98500;
+    --good:           #0ca30c;
+    --warn-bg:        #2b2410;
+    --warn-border:    #c98500;
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark;
+  --surface-1:      #1a1a19;
+  --page:           #0d0d0d;
+  --text-primary:   #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted:     #898781;
+  --grid:           #2c2c2a;
+  --axis:           #383835;
+  --border:         rgba(255,255,255,0.10);
+  --series-spec:    #3987e5;
+  --series-nospec:  #d95926;
+  --depth-1024:     #3987e5;
+  --depth-4096:     #d95926;
+  --depth-16384:    #199e70;
+  --depth-65536:    #c98500;
+  --good:           #0ca30c;
+  --warn-bg:        #2b2410;
+  --warn-border:    #c98500;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+.viz-root {
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: 32px 20px 64px;
+  min-height: 100vh;
+}
+.wrap { max-width: 1040px; margin: 0 auto; }
+
+h1 { font-size: 22px; font-weight: 650; margin: 0 0 6px; }
+h3 { font-size: 15px; font-weight: 650; margin: 36px 0 4px; }
+.subtitle { color: var(--text-secondary); font-size: 14px; margin: 0 0 4px; line-height: 1.5; }
+.meta { color: var(--text-muted); font-size: 12.5px; margin: 0 0 28px; line-height: 1.6; }
+.meta code { background: var(--grid); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.tile {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.tile .label { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 6px; }
+.tile .value { font-size: 26px; font-weight: 650; line-height: 1.1; }
+.tile .value .unit { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-left: 3px; }
+.tile .delta { font-size: 12.5px; color: var(--good); margin-top: 4px; font-weight: 600; }
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 20px 8px;
+  margin-bottom: 20px;
+}
+.card h2 { font-size: 15px; font-weight: 650; margin: 0 0 2px; }
+.card .card-sub { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 14px; }
+
+.charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.facets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+@media (max-width: 720px) {
+  .charts-row { grid-template-columns: 1fr; }
+  .facets { grid-template-columns: 1fr 1fr; }
+}
+.facet-title { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; text-align: center; }
+
+.legend { display: flex; gap: 18px; font-size: 12.5px; color: var(--text-secondary); margin: 4px 0 14px; flex-wrap: wrap; }
+.legend .item { display: flex; align-items: center; gap: 6px; }
+.legend .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+svg { overflow: visible; display: block; }
+.axis-label { font-size: 11px; fill: var(--text-muted); }
+.axis-line { stroke: var(--axis); stroke-width: 1; }
+.grid-line { stroke: var(--grid); stroke-width: 1; }
+.data-line { fill: none; stroke-width: 2; }
+.data-dot { stroke: var(--surface-1); stroke-width: 2; }
+.ref-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3,3; }
+.end-label { font-size: 11.5px; font-weight: 600; }
+.tick-label { font-size: 10.5px; fill: var(--text-muted); }
+
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 6px;
+}
+table.data-table th, table.data-table td {
+  text-align: right;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--grid);
+  font-variant-numeric: tabular-nums;
+}
+table.data-table th:first-child, table.data-table td:first-child { text-align: left; }
+table.data-table th:nth-child(2), table.data-table td:nth-child(2) { text-align: left; }
+table.data-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+table.data-table tr:last-child td { border-bottom: none; }
+.row-spec td.hl { color: var(--series-spec); font-weight: 600; }
+.row-nospec td.hl { color: var(--series-nospec); font-weight: 600; }
+.row-flag td { background: color-mix(in srgb, var(--warn-border) 10%, transparent); }
+
+.note {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--grid);
+}
+.note b { color: var(--text-primary); }
+
+.callout {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  margin-bottom: 24px;
+}
+.callout b { font-weight: 650; }
+</style>
+
+<div class="viz-root">
+<div class="wrap">
+
+<h1>Qwen3.8‑27B — DFlash2 Speculative Decoding Benchmark</h1>
+<p class="subtitle">Prefill and decode throughput with vs. without speculative decoding — across four context depths, and across concurrency 1×/2×/4×.</p>
+<p class="meta">
+  Model <code>unsloth/Qwen3.8-27B-NVFP4</code> · Draft <code>incoai/Qwen3.8-27B-DFlash2</code> (7 spec tokens) ·
+  1× RTX PRO 6000 Blackwell Max‑Q · vLLM 0.28.0 · <code>vllm bench serve</code>, sonnet-text dataset, 256 output tokens, seed 42.
+</p>
+
+<div class="tiles">
+  <div class="tile">
+    <div class="label">Decode speedup, single‑stream</div>
+    <div class="value">2.0–2.3<span class="unit">×</span></div>
+    <div class="delta">at concurrency 1, all depths</div>
+  </div>
+  <div class="tile">
+    <div class="label">Decode speedup, 4× concurrency</div>
+    <div class="value">1.0–2.3<span class="unit">×</span></div>
+    <div class="delta">shrinks sharply with depth</div>
+  </div>
+  <div class="tile">
+    <div class="label">4×‑concurrency throughput gain</div>
+    <div class="value">2.6–3.3<span class="unit">×</span></div>
+    <div class="delta">vs. single‑stream, at shallow depth</div>
+  </div>
+  <div class="tile">
+    <div class="label">Prefill throughput</div>
+    <div class="value">~7–10k<span class="unit">tok/s</span></div>
+    <div class="delta">unaffected by spec decode</div>
+  </div>
+</div>
+
+<h3>Part 1 — depth sweep (single‑stream, concurrency = 1)</h3>
+
+<div class="card">
+  <h2>Decode throughput vs. context depth</h2>
+  <p class="card-sub">Single‑stream tokens/sec (1000 ÷ mean TPOT) — the metric speculative decoding directly targets.</p>
+  <div class="legend">
+    <span class="item"><span class="swatch" style="background:var(--series-spec)"></span>with spec decode (dflash)</span>
+    <span class="item"><span class="swatch" style="background:var(--series-nospec)"></span>without spec decode</span>
+  </div>
+  <div id="chart-decode"></div>
+</div>
+
+<div class="card">
+  <h2>Prefill throughput vs. context depth</h2>
+  <p class="card-sub">Single‑stream tokens/sec (input length ÷ mean TTFT) — a pure forward‑pass cost, so both configs track together.</p>
+  <div class="legend">
+    <span class="item"><span class="swatch" style="background:var(--series-spec)"></span>with spec decode (dflash)</span>
+    <span class="item"><span class="swatch" style="background:var(--series-nospec)"></span>without spec decode</span>
+  </div>
+  <div id="chart-prefill"></div>
+</div>
+
+<p class="note">
+  Prefill throughput is essentially identical between the two servers (spec decode doesn't touch the prefill pass) and gently declines at the largest depth as attention/KV‑cache overhead grows. Decode throughput is where speculative decoding pays off at single‑stream concurrency — a consistent <b>~2–2.3×</b> improvement, tracking the dflash draft model's ~25–31% token acceptance rate at up to 7 speculative tokens/step.
+</p>
+
+<h3>Part 2 — concurrency sweep (1× / 2× / 4×, all four depths)</h3>
+
+<div class="callout">
+  <b>Data‑integrity note.</b> The <code>sonnet</code> dataset used for realistic text deterministically tiles the same small corpus regardless of requested depth — so a 65,536‑token prompt is a literal prefix‑extension of the 16,384‑token prompt already served earlier in the same sweep, on the same long‑lived server. vLLM's automatic prefix caching (on by default, as it would be in production) turned that into a spurious 8× "speedup" for one cell (spec, 2×, depth 65,536: TTFT measured at 1.2s). We caught it via the <code>/metrics</code> prefix‑cache‑hit counters, then re‑ran that cell in isolation against a freshly‑restarted, cache‑empty server (0 hits confirmed) to get the corrected TTFT of 15.9s used below. One neighboring cell (spec, 4×, depth 16,384, flagged in the table) shows a milder version of the same pattern and should be read with the same caution — its <b>decode</b> throughput numbers are unaffected either way, since prefix caching never shortcuts token <i>generation</i>, only prompt <i>prefill</i>.
+</div>
+
+<div class="card">
+  <h2>Aggregate decode throughput vs. concurrency, by depth</h2>
+  <p class="card-sub">Output tokens/sec summed across all concurrent requests — what "throughput" means in a multi-user serving setting.</p>
+  <div class="legend">
+    <span class="item"><span class="swatch" style="background:var(--series-spec)"></span>with spec decode (dflash)</span>
+    <span class="item"><span class="swatch" style="background:var(--series-nospec)"></span>without spec decode</span>
+  </div>
+  <div class="facets" id="facets-throughput"></div>
+</div>
+
+<div class="card">
+  <h2>Spec‑decode speedup vs. concurrency, by depth</h2>
+  <p class="card-sub">Per‑request decode tok/s ratio (spec ÷ no‑spec). Dashed line = break‑even (1.0×, spec decode provides no benefit).</p>
+  <div class="legend" id="legend-speedup"></div>
+  <div id="chart-speedup"></div>
+</div>
+
+<p class="note">
+  The speedup from speculative decoding is largest at single‑stream concurrency and shallow depth (<b>2.3×</b> at depth 1,024) and erodes steadily as either concurrency or context depth increases — dropping toward <b>~1×</b> (no benefit) at depth 65,536 with 4 concurrent requests. This matches the expected mechanism: dflash's gain comes from trading idle memory‑bandwidth for compute during single‑request decode; once the batch is large enough that the GPU is already compute‑bound generating real tokens for other sequences, the draft model's extra verify‑step FLOPs compete directly with that useful work instead of being free. Meanwhile, aggregate throughput itself scales well with concurrency regardless of spec decode — <b>~2.6–3.3×</b> going from 1× to 4× concurrency at shallow depth, tapering at 64K depth where per‑request KV‑cache size starts to dominate.
+</p>
+
+<div class="card">
+  <h2>Full results</h2>
+  <p class="card-sub">All depth × concurrency × config combinations. Flagged row: possible mild prefix‑cache carryover in TTFT/prefill (decode figures unaffected) — see note above.</p>
+  <table class="data-table" id="results-table"></table>
+</div>
+
+<p class="note">
+  <b>Methodology:</b> requests were generated via <code>vllm bench serve</code>'s <code>sonnet</code> dataset (real repeated‑text English, not random token IDs) so the draft model's predictions reflect realistic acceptance — random‑token inputs measured near‑0% acceptance since the draft model can't meaningfully predict noise. Concurrency runs used 2× and 4× the request count (num‑prompts = 2 × concurrency) to give each level at least one full round of batching.
+</p>
+
+</div>
+</div>
+
+<script>
+const spec = [
+  {depth: 1024,  ttft: 133.6,  prefill: 7617.0,  tpot: 6.96, decode: 143.6, acc: 30.7},
+  {depth: 4096,  ttft: 403.7,  prefill: 10092.7, tpot: 7.63, decode: 131.1, acc: 26.9},
+  {depth: 16384, ttft: 1731.9, prefill: 9431.3,  tpot: 7.99, decode: 125.2, acc: 26.3},
+  {depth: 65536, ttft: 9817.1, prefill: 6667.8,  tpot: 9.06, decode: 110.3, acc: 24.9},
+];
+const nospec = [
+  {depth: 1024,  ttft: 114.5,  prefill: 8886.5,  tpot: 16.07, decode: 62.2},
+  {depth: 4096,  ttft: 390.7,  prefill: 10426.3, tpot: 16.28, decode: 61.4},
+  {depth: 16384, ttft: 1662.8, prefill: 9823.0,  tpot: 16.69, decode: 59.9},
+  {depth: 65536, ttft: 9667.9, prefill: 6770.7,  tpot: 17.93, decode: 55.8},
+];
+
+// concurrency sweep — keyed by depth -> [{conc, spec:{...}, nospec:{...}}]
+// (spec, conc=2, depth=65536) uses the corrected/re-verified numbers.
+const concData = {
+  1024: [
+    {conc: 1, sTpot: 6.96,  sDecode: 143.6, sAgg: 134.1, nTpot: 16.07, nDecode: 62.2, nAgg: 60.8},
+    {conc: 2, sTpot: 7.50,  sDecode: 133.4, sAgg: 232.8, nTpot: 17.38, nDecode: 57.5, nAgg: 108.2},
+    {conc: 4, sTpot: 8.02,  sDecode: 124.7, sAgg: 395.0, nTpot: 18.31, nDecode: 54.6, nAgg: 202.1},
+  ],
+  4096: [
+    {conc: 1, sTpot: 7.63,  sDecode: 131.1, sAgg: 109.0, nTpot: 16.28, nDecode: 61.4, nAgg: 56.4},
+    {conc: 2, sTpot: 9.18,  sDecode: 108.9, sAgg: 170.7, nTpot: 18.19, nDecode: 55.0, nAgg: 98.4},
+    {conc: 4, sTpot: 11.28, sDecode: 88.6,  sAgg: 258.4, nTpot: 18.67, nDecode: 53.6, nAgg: 176.7},
+  ],
+  16384: [
+    {conc: 1, sTpot: 7.99,  sDecode: 125.2, sAgg: 67.9,  nTpot: 16.69, nDecode: 59.9, nAgg: 43.3},
+    {conc: 2, sTpot: 10.78, sDecode: 92.7,  sAgg: 91.9,  nTpot: 20.87, nDecode: 47.9, nAgg: 66.4},
+    {conc: 4, sTpot: 20.02, sDecode: 50.0,  sAgg: 137.4, nTpot: 23.09, nDecode: 43.3, nAgg: 111.1, flag: true},
+  ],
+  65536: [
+    {conc: 1, sTpot: 9.06,  sDecode: 110.3, sAgg: 21.1,  nTpot: 17.93, nDecode: 55.8, nAgg: 18.0},
+    {conc: 2, sTpot: 38.82, sDecode: 25.8,  sAgg: 19.8,  nTpot: 46.09, nDecode: 21.7, nAgg: 22.0},
+    {conc: 4, sTpot: 56.04, sDecode: 17.8,  sAgg: 35.3,  nTpot: 56.81, nDecode: 17.6, nAgg: 33.5},
+  ],
+};
+const depthKeys = [1024, 4096, 16384, 65536];
+const depthLabel = (d) => d >= 1000 ? (d/1000) + 'K' : String(d);
+
+const root = getComputedStyle(document.querySelector('.viz-root'));
+const col = (name) => root.getPropertyValue(name).trim();
+
+function lineChart(containerId, key, yLabel, yMax) {
+  const W = 440, H = 240;
+  const padL = 46, padR = 46, padT = 14, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  const depths = spec.map(d => d.depth);
+  const xLog = depths.map(d => Math.log10(d));
+  const xMin = xLog[0], xMax = xLog[xLog.length - 1];
+  const xScale = (d) => padL + ((Math.log10(d) - xMin) / (xMax - xMin)) * plotW;
+  const yScale = (v) => padT + plotH - (v / yMax) * plotH;
+
+  const specColor = col('--series-spec');
+  const nospecColor = col('--series-nospec');
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">`;
+
+  const ySteps = 4;
+  for (let i = 0; i <= ySteps; i++) {
+    const v = (yMax / ySteps) * i;
+    const y = yScale(v);
+    svg += `<line class="grid-line" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" />`;
+    svg += `<text class="tick-label" x="${padL - 8}" y="${y + 3}" text-anchor="end">${Math.round(v).toLocaleString()}</text>`;
+  }
+  svg += `<line class="axis-line" x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" />`;
+
+  depths.forEach(d => {
+    const x = xScale(d);
+    svg += `<text class="tick-label" x="${x}" y="${padT + plotH + 18}" text-anchor="middle">${depthLabel(d)}</text>`;
+  });
+  svg += `<text class="axis-label" x="${padL + plotW/2}" y="${H + 4}" text-anchor="middle">context depth (tokens, log scale)</text>`;
+
+  function seriesPath(data, colorVar) {
+    const pts = data.map(d => `${xScale(d.depth)},${yScale(d[key])}`);
+    let s = `<polyline class="data-line" points="${pts.join(' ')}" style="stroke:${colorVar}" />`;
+    data.forEach((d) => {
+      const x = xScale(d.depth), y = yScale(d[key]);
+      s += `<circle class="data-dot" cx="${x}" cy="${y}" r="4.5" style="fill:${colorVar}" />`;
+    });
+    const last = data[data.length - 1];
+    const lx = xScale(last.depth), ly = yScale(last[key]);
+    s += `<text class="end-label" x="${lx}" y="${ly - 12}" text-anchor="end" style="fill:${colorVar}">${last[key].toLocaleString()}</text>`;
+    return s;
+  }
+
+  svg += seriesPath(nospec, nospecColor);
+  svg += seriesPath(spec, specColor);
+  svg += `</svg>`;
+  document.getElementById(containerId).innerHTML = svg;
+}
+
+lineChart('chart-decode', 'decode', 'tokens/sec', 160);
+lineChart('chart-prefill', 'prefill', 'tokens/sec', 12000);
+
+// --- small multiples: aggregate throughput vs concurrency, faceted by depth ---
+function facetChart(depth, aggMax) {
+  const W = 220, H = 170;
+  const padL = 40, padR = 14, padT = 10, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const concs = [1, 2, 4];
+  const xScale = (c) => padL + ((Math.log2(c) - 0) / (Math.log2(4) - 0)) * plotW;
+  const yScale = (v) => padT + plotH - (v / aggMax) * plotH;
+  const specColor = col('--series-spec');
+  const nospecColor = col('--series-nospec');
+  const rows = concData[depth];
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">`;
+  const ySteps = 2;
+  for (let i = 0; i <= ySteps; i++) {
+    const v = (aggMax / ySteps) * i;
+    const y = yScale(v);
+    svg += `<line class="grid-line" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" />`;
+    svg += `<text class="tick-label" x="${padL - 6}" y="${y + 3}" text-anchor="end">${Math.round(v)}</text>`;
+  }
+  svg += `<line class="axis-line" x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" />`;
+  concs.forEach(c => {
+    svg += `<text class="tick-label" x="${xScale(c)}" y="${padT + plotH + 16}" text-anchor="middle">${c}×</text>`;
+  });
+
+  function seriesPath(key, colorVar) {
+    const pts = rows.map(r => `${xScale(r.conc)},${yScale(r[key])}`);
+    let s = `<polyline class="data-line" points="${pts.join(' ')}" style="stroke:${colorVar}" />`;
+    rows.forEach(r => {
+      s += `<circle class="data-dot" cx="${xScale(r.conc)}" cy="${yScale(r[key])}" r="4" style="fill:${colorVar}" />`;
+    });
+    return s;
+  }
+  svg += seriesPath('nAgg', nospecColor);
+  svg += seriesPath('sAgg', specColor);
+  svg += `</svg>`;
+  return svg;
+}
+
+let facetsHtml = '';
+const facetMax = {1024: 450, 4096: 300, 16384: 160, 65536: 40};
+depthKeys.forEach(d => {
+  facetsHtml += `<div><div class="facet-title">depth ${depthLabel(d)}</div>${facetChart(d, facetMax[d])}</div>`;
+});
+document.getElementById('facets-throughput').innerHTML = facetsHtml;
+
+// --- speedup vs concurrency, one line per depth ---
+function speedupChart() {
+  const W = 620, H = 260;
+  const padL = 50, padR = 60, padT = 14, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const concs = [1, 2, 4];
+  const yMax = 2.6, yMin = 0.8;
+  const xScale = (c) => padL + ((Math.log2(c) - 0) / (Math.log2(4) - 0)) * plotW;
+  const yScale = (v) => padT + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+
+  const depthColors = {1024: col('--depth-1024'), 4096: col('--depth-4096'), 16384: col('--depth-16384'), 65536: col('--depth-65536')};
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">`;
+  const ySteps = [1.0, 1.5, 2.0, 2.5];
+  ySteps.forEach(v => {
+    const y = yScale(v);
+    svg += `<line class="grid-line" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" />`;
+    svg += `<text class="tick-label" x="${padL - 8}" y="${y + 3}" text-anchor="end">${v.toFixed(1)}×</text>`;
+  });
+  // break-even reference line
+  const yBreak = yScale(1.0);
+  svg += `<line class="ref-line" x1="${padL}" y1="${yBreak}" x2="${W - padR}" y2="${yBreak}" />`;
+  svg += `<line class="axis-line" x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" />`;
+  concs.forEach(c => {
+    svg += `<text class="tick-label" x="${xScale(c)}" y="${padT + plotH + 18}" text-anchor="middle">${c}×</text>`;
+  });
+  svg += `<text class="axis-label" x="${padL + plotW/2}" y="${H + 4}" text-anchor="middle">concurrency</text>`;
+
+  depthKeys.forEach(depth => {
+    const rows = concData[depth];
+    const colorVar = depthColors[depth];
+    const pts = rows.map(r => `${xScale(r.conc)},${yScale(r.sDecode / r.nDecode)}`);
+    svg += `<polyline class="data-line" points="${pts.join(' ')}" style="stroke:${colorVar}" />`;
+    rows.forEach(r => {
+      svg += `<circle class="data-dot" cx="${xScale(r.conc)}" cy="${yScale(r.sDecode / r.nDecode)}" r="4" style="fill:${colorVar}" />`;
+    });
+    const last = rows[rows.length - 1];
+    const ratio = last.sDecode / last.nDecode;
+    svg += `<text class="end-label" x="${xScale(last.conc) + 6}" y="${yScale(ratio) + 3}" text-anchor="start" style="fill:${colorVar}">${depthLabel(depth)}: ${ratio.toFixed(2)}×</text>`;
+  });
+
+  svg += `</svg>`;
+  return svg;
+}
+document.getElementById('chart-speedup').innerHTML = speedupChart();
+
+let legendHtml = '';
+depthKeys.forEach(d => {
+  legendHtml += `<span class="item"><span class="swatch" style="background:var(--depth-${d})"></span>depth ${depthLabel(d)}</span>`;
+});
+document.getElementById('legend-speedup').innerHTML = legendHtml;
+
+// --- full results table ---
+function fmt(n, d=1) { return n.toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d}); }
+let rows = '<tr><th>Depth</th><th>Conc.</th><th>Config</th><th>Mean TPOT (ms)</th><th>Decode/req (tok/s)</th><th>Agg. decode (tok/s)</th><th>Speedup</th></tr>';
+depthKeys.forEach(depth => {
+  concData[depth].forEach(r => {
+    const flagClass = r.flag ? ' row-flag' : '';
+    rows += `<tr class="row-spec${flagClass}"><td>${depthLabel(depth)}</td><td>${r.conc}×</td><td class="hl">spec</td><td>${fmt(r.sTpot,2)}</td><td class="hl">${fmt(r.sDecode)}</td><td>${fmt(r.sAgg)}</td><td rowspan="1">${fmt(r.sDecode/r.nDecode,2)}×${r.flag ? ' ⚠' : ''}</td></tr>`;
+    rows += `<tr class="row-nospec${flagClass}"><td></td><td></td><td class="hl">nospec</td><td>${fmt(r.nTpot,2)}</td><td class="hl">${fmt(r.nDecode)}</td><td>${fmt(r.nAgg)}</td><td></td></tr>`;
+  });
+});
+document.getElementById('results-table').innerHTML = rows;
+</script>
