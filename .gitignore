@@ -3,3 +3,6 @@
 
 # Ephemeral server run logs (regenerated on every start/restart)
 /*.log
+
+# llama-swap binary (downloaded release, not portable/reproducible as a commit)
+/llama-swap

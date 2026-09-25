@@ -1,0 +1,106 @@
+# llama-swap config for bfg — deployed to ~/Projects/03_experiments/qwen3.8_hosting/
+# (see deploy/bfg_llama_swap/README.md for the why and the cutover checklist).
+#
+# bfg serves exactly one model: qwen3.8-27b, a plain vLLM deployment (see
+# ../../README.md's "Remote and LAN backends"). Unlike spark1's llama-server
+# instances, vLLM has no in-place unload/reload — the process either holds the
+# weights or it doesn't. So "dynamic" here means llama-swap starts the whole
+# vLLM process on first request and kills it after an idle ttl, same mechanism
+# spark1 already uses, just wrapping `vllm serve` instead of `llama-server`.
+#
+# This is intentionally a single-model config — no groups/exclusivity needed.
+# bfg is deliberately concurrency-focused (one model, sized to hold many
+# in-flight KV caches) rather than a multi-model swap host like spark1.
+#
+# GPU1 (where this model lives — CUDA_VISIBLE_DEVICES=1 below) is otherwise
+# shared. Since spinning down is the whole point of this change, there's a
+# real window where someone else's job (a training run, say) claims GPU1's
+# now-free memory before the next request tries to reload us. cmd: below
+# points at check_gpu_and_launch.sh rather than vllm directly — it refuses to
+# start (and the request fails fast) if GPU1 can't actually fit the model,
+# instead of loading anyway and crashing into whatever's running there.
+
+# NOT 12001 — that's bfg-probe.service's port (deploy/bfg_probe/), a fixed
+# assignment unrelated to this config. Learned the hard way: llama-swap
+# assigns ${PORT} starting here, vLLM tried to bind 12001, and hit
+# "Address already in use" against the probe every time (see git history).
+startPort: 13001
+logToStdout: "both"
+
+# Measured 2026-09-23 (first real cutover, before the --kv-cache-memory
+# change below): cold start took ~5 minutes — weights + dflash draft model +
+# ~50s GPU-memory profiling pass + two rounds of CUDA graph capture + extra
+# warmup on the first real request. No fast path here, unlike llama-server's
+# --cache-ram resume. 300s was the original placeholder and would have been
+# cutting it uncomfortably close (that run took ~297-302s of wall-clock);
+# 600s gives headroom even before the profiling-pass elimination below.
+healthCheckTimeout: 600
+
+macros:
+  # check_gpu_and_launch.sh refuses to start vLLM at all if GPU1 doesn't have
+  # enough free memory to fit it — see that script and the README's "GPU-fit
+  # gate" section. It execs into the real vllm binary once the check passes,
+  # so it's a transparent stand-in for calling vllm directly.
+  gpu_check: /home/richard/Projects/03_experiments/qwen3.8_hosting/check_gpu_and_launch.sh
+
+models:
+  qwen3.8-27b:
+    # Called directly (not via serve.sh) so llama-swap's SIGTERM lands on the
+    # vllm process itself rather than a wrapping shell — llama-swap signals
+    # only the one PID it launched (proxy/process.go: no process-group kill),
+    # so vLLM's own signal handling has to be what tears down its EngineCore
+    # subprocess. Confirmed EngineCore is a real child of this PID on bfg
+    # today (ps: EngineCore's PPID == the vllm serve PID), which is the
+    # precondition for that to work — but "should cascade" is not "verified
+    # cascades cleanly under llama-swap specifically". Check for orphaned
+    # EngineCore processes / held VRAM after the first ttl-triggered stop,
+    # before trusting this unattended. See README checklist.
+    #
+    # ${gpu_check} stands in for the vllm binary itself (see macro above) —
+    # it exec's into vllm after confirming GPU1 can actually fit the model,
+    # so the args below are identical to calling vllm directly.
+    #
+    # Switched 2026-09-23 from the unsloth NVFP4 checkpoint to this FP8 one,
+    # with --kv-cache-dtype fp8 explicit below. The NVFP4 checkpoint (no
+    # explicit --kv-cache-dtype, so it defaulted to NVFP4 KV to match) hit
+    # https://github.com/flashinfer-ai/flashinfer/issues/4731 — an upstream,
+    # hardware-specific bug: SM120 (this GPU) + NVFP4 KV + masked multi-token
+    # XQA verify (exactly what dflash speculative decoding does) is flaky.
+    # Not a config mistake on our end — it only ever surfaced here *because*
+    # dynamic loading repeats the cold-start path far more often than the old
+    # always-resident process did (see docs/gateway/guides/
+    # bfg-dynamic-cutover.md for the failure investigation). bimo's own
+    # separate deployment on this same box (GPU0, port 9132) has run this
+    # exact model + --kv-cache-dtype fp8 + the same dflash speculative-config
+    # stably the whole time we were debugging the NVFP4 path — good live
+    # evidence this combination avoids the bug. Dropped --mm-encoder-tp-mode
+    # (this checkpoint has no mmproj/vision component, unlike the NVFP4 one).
+    # Tried --max-num-seqs 8 (matching bimo's invocation) as a diagnostic —
+    # ruled out: identical failure with or without it, so batch-size/
+    # CUDA-graph-shape selection was never the actual trigger. The real fix
+    # is the CUDA_HOME/PATH/LD_LIBRARY_PATH env in check_gpu_and_launch.sh —
+    # see that script's comment and docs/gateway/guides/
+    # bfg-dynamic-cutover.md. Left uncapped here, matching bfg's
+    # concurrency-focused design goal.
+    cmd: "${gpu_check} serve /data/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
+      --served-model-name qwen3.8-27b
+      --port ${PORT}
+      --trust-remote-code
+      --kv-cache-dtype fp8
+      --max-model-len 262144
+      --gpu-memory-utilization 0.85
+      --tensor-parallel-size 1
+      --enable-auto-tool-choice
+      --tool-call-parser qwen3_coder
+      --reasoning-parser qwen3
+      --speculative-config '{\"method\": \"dflash\", \"model\": \"/data/huggingface/hub/models--incoai--Qwen3.8-27B-DFlash2/snapshots/dedf8df68adfb1afeaf7b7480c0a0243108177b4\", \"num_speculative_tokens\": 7}'"
+    env:
+      - "CUDA_VISIBLE_DEVICES=1"
+      - "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+    checkEndpoint: /health
+    # Idle time before llama-swap kills the process and frees GPU1's ~85GB.
+    # Placeholder — trades off against the cold-start cost above; tune once
+    # that's measured and usage patterns are known. Shared GPU box (bimo and
+    # others also run jobs on it), so freeing VRAM when idle is the whole
+    # point — but not so aggressively that normal usage gaps cause thrashing.
+    ttl: 1800
