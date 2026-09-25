@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/../.."
 source .venv/bin/activate
+source models/qwen3.8-27b/model.env
 
 export CUDA_VISIBLE_DEVICES=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-vllm serve /data/huggingface/hub/models--unsloth--Qwen3.8-27B-NVFP4/snapshots/57926baca9a82b4d6906b43f2750d55315f5b10f \
-  --served-model-name qwen3.8-27b \
-  --port 12000 \
+vllm serve "$MODEL_PATH" \
+  --served-model-name "$MODEL_NAME" \
+  --port "$PORT" \
   --gpu-memory-utilization 0.85 \
   --tensor-parallel-size 1 \
   --enable-auto-tool-choice \

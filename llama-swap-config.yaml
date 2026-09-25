@@ -104,3 +104,27 @@ models:
     # others also run jobs on it), so freeing VRAM when idle is the whole
     # point — but not so aggressively that normal usage gaps cause thrashing.
     ttl: 1800
+
+  # SCAFFOLD — commented out, not a live entry. qwen3.8-flash-next
+  # (Inferact/Qwen3.8-Flash-Next-NVFP4, see models/qwen3.8-flash-next/README.md)
+  # is a much bigger, architecturally different model whose vLLM flags are
+  # still unvalidated (GPU fit on a single card is unconfirmed, and its
+  # speculative-decode method name isn't known yet — do NOT copy the
+  # dflash speculative-config below, it's a placeholder). Uncomment and fix
+  # up only after manually validating models/qwen3.8-flash-next/serve.sh.
+  #
+  # qwen3.8-flash-next:
+  #   cmd: "${gpu_check} serve /data/huggingface/hub/models--Inferact--Qwen3.8-Flash-Next-NVFP4/snapshots/103a7608316173ca6edd49929544244de7ffda70
+  #     --served-model-name qwen3.8-flash-next
+  #     --port ${PORT}
+  #     --trust-remote-code
+  #     --gpu-memory-utilization 0.85
+  #     --tensor-parallel-size 1
+  #     --enable-auto-tool-choice
+  #     --tool-call-parser qwen3_coder
+  #     --reasoning-parser qwen3"
+  #   env:
+  #     - "CUDA_VISIBLE_DEVICES=1"
+  #     - "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+  #   checkEndpoint: /health
+  #   ttl: 1800

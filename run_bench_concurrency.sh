@@ -4,10 +4,12 @@ set -uo pipefail
 cd "$(dirname "$0")"
 source .venv/bin/activate
 
-RESULT_DIR=./bench_results
-mkdir -p "$RESULT_DIR"
+MODEL="${1:-qwen3.8-27b}"
+MODEL_DIR="models/$MODEL"
+source "$MODEL_DIR/model.env"
 
-MODEL_PATH=/data/huggingface/hub/models--unsloth--Qwen3.8-27B-NVFP4/snapshots/57926baca9a82b4d6906b43f2750d55315f5b10f
+RESULT_DIR="$MODEL_DIR/bench_results"
+mkdir -p "$RESULT_DIR"
 
 DEPTHS=(1024 4096 16384 65536)
 CONCURRENCIES=(2 4)
@@ -24,8 +26,8 @@ run_sweep () {
         --backend openai \
         --endpoint /v1/completions \
         --host 127.0.0.1 \
-        --port 12000 \
-        --model qwen3.8-27b \
+        --port "$PORT" \
+        --model "$MODEL_NAME" \
         --tokenizer "$MODEL_PATH" \
         --dataset-name sonnet \
         --dataset-path ./sonnet.txt \
@@ -50,7 +52,7 @@ run_sweep () {
 wait_for_ready () {
   local timeout_s=$1
   local waited=0
-  until curl -s -o /dev/null http://127.0.0.1:12000/health; do
+  until curl -s -o /dev/null "http://127.0.0.1:$PORT/health"; do
     sleep 2
     waited=$((waited + 2))
     if [ "$waited" -ge "$timeout_s" ]; then
@@ -62,13 +64,13 @@ wait_for_ready () {
 }
 
 stop_server () {
-  echo "Stopping server on port 12000..."
-  pkill -f "serve_nospec.sh" 2>/dev/null || true
-  pkill -f "\./serve\.sh" 2>/dev/null || true
+  echo "Stopping server on port $PORT..."
+  pkill -f "serve_nospec\.sh" 2>/dev/null || true
+  pkill -f "serve\.sh" 2>/dev/null || true
   pkill -f "vllm serve" 2>/dev/null || true
   pkill -f "VLLM::EngineCore" 2>/dev/null || true
   local waited=0
-  while (echo > /dev/tcp/127.0.0.1/12000) 2>/dev/null; do
+  while (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; do
     sleep 2
     waited=$((waited + 2))
     if [ "$waited" -ge 60 ]; then
@@ -89,13 +91,13 @@ echo "############################################"
 echo "# Phase 2: swap to NO-SPEC baseline server  #"
 echo "############################################"
 stop_server
-nohup ./serve_nospec.sh > server_nospec.log 2>&1 &
+nohup "./$MODEL_DIR/serve_nospec.sh" > "$MODEL_DIR/server_nospec.log" 2>&1 &
 echo "nospec server PID: $!"
 disown
 
 echo "Waiting for nospec server startup (log-based)..."
 waited=0
-until grep -qE "Application startup complete|Traceback|address already in use" server_nospec.log 2>/dev/null; do
+until grep -qE "Application startup complete|Traceback|address already in use" "$MODEL_DIR/server_nospec.log" 2>/dev/null; do
   sleep 2
   waited=$((waited + 2))
   if [ "$waited" -ge 300 ]; then
@@ -103,7 +105,7 @@ until grep -qE "Application startup complete|Traceback|address already in use" s
     break
   fi
 done
-tail -n 5 server_nospec.log
+tail -n 5 "$MODEL_DIR/server_nospec.log"
 wait_for_ready 60 || { echo "nospec server not ready, aborting"; exit 1; }
 
 echo "############################################"
@@ -115,13 +117,13 @@ echo "############################################"
 echo "# Phase 4: restore SPEC-DECODE server       #"
 echo "############################################"
 stop_server
-nohup ./serve.sh > server.log 2>&1 &
+nohup "./$MODEL_DIR/serve.sh" > "$MODEL_DIR/server.log" 2>&1 &
 echo "spec server PID: $!"
 disown
 
 echo "Waiting for spec server startup (log-based)..."
 waited=0
-until grep -qE "Application startup complete|Traceback|address already in use" server.log 2>/dev/null; do
+until grep -qE "Application startup complete|Traceback|address already in use" "$MODEL_DIR/server.log" 2>/dev/null; do
   sleep 2
   waited=$((waited + 2))
   if [ "$waited" -ge 300 ]; then
@@ -129,7 +131,7 @@ until grep -qE "Application startup complete|Traceback|address already in use" s
     break
   fi
 done
-tail -n 5 server.log
+tail -n 5 "$MODEL_DIR/server.log"
 wait_for_ready 60 && echo "Spec-decode server restored and ready."
 
 echo "ALL CONCURRENCY BENCHMARK PHASES COMPLETE"
