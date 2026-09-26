@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# SCAFFOLD — not validated. See models/qwen3.8-flash-next/README.md for what's
-# unconfirmed (vLLM architecture support, GPU sizing, speculative-decode
-# method name, vision/vocab flags) before running this for real.
+# Validated 2026-09-26 on GPU0 — see README.md's "2026-09-26: validated
+# working config" section for the full investigation (why nightly vLLM, why
+# these specific offload flags, why CUDA graphs needed --max-num-seqs
+# dropped, why MTP speculative decoding was tried and rejected) and
+# bench_results/ for the numbers. This is also the config running live under
+# llama-swap-config.yaml's qwen3.8-flash-next entry; keep the two in sync.
 if [ -z "${ALLOW_UNVALIDATED:-}" ]; then
-  echo "models/qwen3.8-flash-next/serve.sh is an unvalidated scaffold." >&2
-  echo "Read models/qwen3.8-flash-next/README.md first, then re-run with" \
-       "ALLOW_UNVALIDATED=1 to proceed anyway." >&2
+  echo "models/qwen3.8-flash-next/serve.sh is validated but still marked" \
+       "manual-only — read README.md, then re-run with ALLOW_UNVALIDATED=1." >&2
   exit 1
 fi
 
@@ -15,38 +17,27 @@ cd "$(dirname "$0")/../.."
 source .venv/bin/activate
 source models/qwen3.8-flash-next/model.env
 
-export CUDA_VISIBLE_DEVICES=1
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
-# TODO before trusting this:
-# - Confirm this vLLM version (0.28.0 in .venv) actually supports the
-#   "qwen4_exp" / Qwen4ExpForConditionalGeneration architecture (hybrid
-#   linear+full attention MoE). The model card only links to an external
-#   vLLM "recipe" page, no inline serve command — check that page.
-# - --gpu-memory-utilization / --tensor-parallel-size: this checkpoint is
-#   125B total / 6B active params (NVFP4) plus a large n-gram embedding
-#   table and an MTP head — likely much tighter on a single ~98GB GPU than
-#   the 27B model. Confirm it actually fits before assuming TP=1.
-# - Built-in MTP speculative decoding: figure out the correct
-#   --speculative-config "method" value for this checkpoint's MTP head
-#   (nvfp4_experts_mtp.safetensors) — do not reuse "dflash", that's the
-#   27B model's separate draft-model method and doesn't apply here.
-# - --tool-call-parser / --reasoning-parser: copied qwen3-family guesses
-#   below from the 27B model's flags; verify against this model's actual
-#   chat template (chat_template.jinja in the checkpoint).
-# - Vision: this checkpoint is vision-capable (image_token_id set,
-#   preprocessor_config.json / video_preprocessor_config.json present).
-#   May need --mm-encoder-tp-mode data like the 27B model's NVFP4 variant.
-# - Long context: model card recommends YaRN rope overrides via
-#   --hf-overrides for context > 262144 tokens — not applied here.
+# GPU0, not GPU1 — GPU1 is bfg's shared GPU and (dynamically) hosts
+# qwen3.8-27b via llama-swap. GPU0 is otherwise shared too (see README's GPU0
+# caveat about bimo's own resident deployment sometimes living there) — check
+# nvidia-smi -i 0 yourself before running this manually; unlike the
+# llama-swap path, this script does not gate on GPU fit.
+export CUDA_VISIBLE_DEVICES=0
+# NOT expandable_segments:True (unlike qwen3.8-27b's env) — incompatible with
+# --kv-transfer-config's OffloadingConnector (vLLM rejects it at startup).
 
 vllm serve "$MODEL_PATH" \
   --served-model-name "$MODEL_NAME" \
   --port "$PORT" \
   --trust-remote-code \
-  --gpu-memory-utilization 0.85 \
   --tensor-parallel-size 1 \
+  --gpu-memory-utilization 0.95 \
+  --max-model-len 262144 \
+  --max-num-seqs 8 \
+  --cpu-offload-gb 100 \
+  --cpu-offload-params ngram_embedding \
+  --offload-backend uva \
+  --kv-transfer-config '{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"cpu_bytes_to_use":34359738368,"blocks_per_chunk":4}}' \
   --enable-auto-tool-choice \
   --tool-call-parser qwen3_coder \
   --reasoning-parser qwen3
-  # --speculative-config: TODO — see notes above, method name unconfirmed.

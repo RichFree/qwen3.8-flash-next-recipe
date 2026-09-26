@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Pre-flight check, then exec into vLLM — runs as llama-swap's actual launched
-# process for qwen3.8-27b (see ../config.yaml's ${gpu_check} macro).
+# process for any model wired through the ${gpu_check} macro in
+# llama-swap-config.yaml (currently qwen3.8-27b on GPU1, qwen3.8-flash-next
+# on GPU0 — see that file's env: blocks for GPU_INDEX/UTILIZATION_PCT).
 #
 # Both GPUs on bfg are otherwise-shared (see README.md): GPU1 runs other
 # people's transient jobs, GPU0 runs bimo's own always-resident deployment.
@@ -26,8 +28,13 @@ set -euo pipefail
 # resident process for headroom instead of GPU1's transient shared jobs.
 GPU_INDEX="${GPU_INDEX:-1}"
 TOTAL_MIB=97887          # RTX PRO 6000 Blackwell on bfg — see nvidia-smi
-UTILIZATION=0.85         # keep in sync with --gpu-memory-utilization below
-REQUIRED_MIB=$(( TOTAL_MIB * 85 / 100 ))
+# Must match the model's own --gpu-memory-utilization (as a whole-number
+# percent, since bash arithmetic below is integer-only). Defaults to 85 to
+# match qwen3.8-27b's existing behavior for anyone calling this script
+# directly without setting it; llama-swap-config.yaml sets it explicitly
+# per-model via env: (qwen3.8-27b: 85, qwen3.8-flash-next: 95).
+UTILIZATION_PCT="${UTILIZATION_PCT:-85}"
+REQUIRED_MIB=$(( TOTAL_MIB * UTILIZATION_PCT / 100 ))
 
 VLLM_BIN="/home/richard/Projects/03_experiments/qwen3.8_hosting/.venv/bin/vllm"
 
@@ -56,8 +63,8 @@ FREE_MIB=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "
 UTIL_PCT=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits -i "$GPU_INDEX")
 
 if (( FREE_MIB < REQUIRED_MIB )); then
-    echo "REFUSING TO START qwen3.8-27b: GPU${GPU_INDEX} has only ${FREE_MIB} MiB free" \
-         "(need ~${REQUIRED_MIB} MiB for --gpu-memory-utilization ${UTILIZATION} of" \
+    echo "REFUSING TO START: GPU${GPU_INDEX} has only ${FREE_MIB} MiB free" \
+         "(need ~${REQUIRED_MIB} MiB for --gpu-memory-utilization 0.${UTILIZATION_PCT} of" \
          "${TOTAL_MIB} MiB total). Current utilization ${UTIL_PCT}% — looks like" \
          "another job (training run?) is using GPU${GPU_INDEX}." >&2
     exit 1

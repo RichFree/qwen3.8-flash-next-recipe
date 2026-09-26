@@ -1,5 +1,6 @@
 # Python virtual environment (installed via uv venv; not portable/reproducible as a commit)
 .venv/
+.venv-backup-*/
 
 # Ephemeral server run logs (regenerated on every start/restart)
 *.log

@@ -1,15 +1,20 @@
 # llama-swap config for bfg — deployed to ~/Projects/03_experiments/qwen3.8_hosting/
 # (see deploy/bfg_llama_swap/README.md for the why and the cutover checklist).
 #
-# bfg serves exactly one model: qwen3.8-27b, a plain vLLM deployment (see
-# ../../README.md's "Remote and LAN backends"). Unlike spark1's llama-server
-# instances, vLLM has no in-place unload/reload — the process either holds the
-# weights or it doesn't. So "dynamic" here means llama-swap starts the whole
-# vLLM process on first request and kills it after an idle ttl, same mechanism
-# spark1 already uses, just wrapping `vllm serve` instead of `llama-server`.
+# bfg serves two models, each a plain vLLM deployment, one per GPU (see
+# ../../README.md's "Remote and LAN backends"): qwen3.8-27b on GPU1,
+# qwen3.8-flash-next on GPU0 (added 2026-09-26 after validating it manually —
+# see models/qwen3.8-flash-next/README.md's "2026-09-26: validated working
+# config" for the full investigation behind its flags). Unlike spark1's
+# llama-server instances, vLLM has no in-place unload/reload — the process
+# either holds the weights or it doesn't. So "dynamic" here means llama-swap
+# starts the whole vLLM process on first request and kills it after an idle
+# ttl, same mechanism spark1 already uses, just wrapping `vllm serve` instead
+# of `llama-server`.
 #
-# This is intentionally a single-model config — no groups/exclusivity needed.
-# bfg is deliberately concurrency-focused (one model, sized to hold many
+# No groups/exclusivity needed between the two — they run on separate GPUs,
+# so there's no shared-resource contention forcing one to unload the other.
+# bfg is deliberately concurrency-focused (each model sized to hold many
 # in-flight KV caches) rather than a multi-model swap host like spark1.
 #
 # Whichever GPU this model lands on (CUDA_VISIBLE_DEVICES=${gpu_index} below,
@@ -29,13 +34,17 @@
 startPort: 13001
 logToStdout: "both"
 
-# Measured 2026-09-23 (first real cutover, before the --kv-cache-memory
-# change below): cold start took ~5 minutes — weights + dflash draft model +
-# ~50s GPU-memory profiling pass + two rounds of CUDA graph capture + extra
-# warmup on the first real request. No fast path here, unlike llama-server's
+# Applies to both models below (global, not per-model). Measured 2026-09-23
+# for qwen3.8-27b (first real cutover, before the --kv-cache-memory change
+# below): cold start took ~5 minutes — weights + dflash draft model + ~50s
+# GPU-memory profiling pass + two rounds of CUDA graph capture + extra warmup
+# on the first real request. No fast path here, unlike llama-server's
 # --cache-ram resume. 300s was the original placeholder and would have been
 # cutting it uncomfortably close (that run took ~297-302s of wall-clock);
 # 600s gives headroom even before the profiling-pass elimination below.
+# qwen3.8-flash-next measured faster cold starts (~3-4 minutes, including its
+# own CUDA graph capture and n-gram/KV-cache CPU offload setup) — same 600s
+# comfortably covers it too.
 healthCheckTimeout: 600
 
 macros:
@@ -54,7 +63,13 @@ macros:
   # also runs bimo's own always-resident qwen3.8-27b deployment (port 9132,
   # unrelated to this repo) — picking GPU0 means racing that resident process
   # for headroom instead of GPU1's transient jobs.
-  gpu_index: "1"
+  # TEMPORARY 2026-09-26: switched to "0" because GPU1 is currently held by
+  # someone else's job (dipa's training run, ~28GB) and doesn't have enough
+  # free memory for qwen3.8-27b's 85% threshold. NOTE: qwen3.8-flash-next's
+  # entry below is hardcoded to GPU0 (not this macro) — while this is "0",
+  # the two models target the SAME GPU and will collide if both are
+  # triggered. Switch back to "1" once GPU1 frees up.
+  gpu_index: "0"
 
 models:
   qwen3.8-27b:
@@ -108,8 +123,17 @@ models:
       --reasoning-parser qwen3
       --speculative-config '{\"method\": \"dflash\", \"model\": \"/data/huggingface/hub/models--incoai--Qwen3.8-27B-DFlash2/snapshots/dedf8df68adfb1afeaf7b7480c0a0243108177b4\", \"num_speculative_tokens\": 7}'"
     env:
-      - "CUDA_VISIBLE_DEVICES=${gpu_index}"
-      - "GPU_INDEX=${gpu_index}"
+      # TEMPORARY 2026-09-26: hardcoded to "0", bypassing the ${gpu_index}
+      # macro — that macro is NOT being substituted into these env: values
+      # right now (confirmed via check_gpu_and_launch.sh debug trace: it
+      # received the literal unresolved string "${gpu_index}", which made
+      # nvidia-smi -i "${gpu_index}" fail instantly). Root cause not yet
+      # found — the macro substitutes fine elsewhere in this same file
+      # (${gpu_check}, ${PORT}). Revert to "${gpu_index}" once that's fixed;
+      # until then, edit these two lines directly to switch GPUs.
+      - "CUDA_VISIBLE_DEVICES=0"
+      - "GPU_INDEX=0"
+      - "UTILIZATION_PCT=85"
       - "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
     checkEndpoint: /health
     # Idle time before llama-swap kills the process and frees the target GPU's ~85GB.
@@ -119,26 +143,41 @@ models:
     # point — but not so aggressively that normal usage gaps cause thrashing.
     ttl: 1800
 
-  # SCAFFOLD — commented out, not a live entry. qwen3.8-flash-next
-  # (Inferact/Qwen3.8-Flash-Next-NVFP4, see models/qwen3.8-flash-next/README.md)
-  # is a much bigger, architecturally different model whose vLLM flags are
-  # still unvalidated (GPU fit on a single card is unconfirmed, and its
-  # speculative-decode method name isn't known yet — do NOT copy the
-  # dflash speculative-config below, it's a placeholder). Uncomment and fix
-  # up only after manually validating models/qwen3.8-flash-next/serve.sh.
+  # Validated 2026-09-26 — see models/qwen3.8-flash-next/README.md's
+  # "2026-09-26: validated working config" section for the full investigation
+  # behind every flag below (why nightly vLLM, why the two separate CPU
+  # offloads, why --max-num-seqs is set instead of --max-model-len, why MTP
+  # speculative decoding is deliberately NOT enabled). Mirrors
+  # models/qwen3.8-flash-next/serve.sh — keep the two in sync.
   #
-  # qwen3.8-flash-next:
-  #   cmd: "${gpu_check} serve /data/huggingface/hub/models--Inferact--Qwen3.8-Flash-Next-NVFP4/snapshots/103a7608316173ca6edd49929544244de7ffda70
-  #     --served-model-name qwen3.8-flash-next
-  #     --port ${PORT}
-  #     --trust-remote-code
-  #     --gpu-memory-utilization 0.85
-  #     --tensor-parallel-size 1
-  #     --enable-auto-tool-choice
-  #     --tool-call-parser qwen3_coder
-  #     --reasoning-parser qwen3"
-  #   env:
-  #     - "CUDA_VISIBLE_DEVICES=1"
-  #     - "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
-  #   checkEndpoint: /health
-  #   ttl: 1800
+  # Fixed to GPU0 (not the switchable ${gpu_index} macro qwen3.8-27b uses
+  # above) — the whole point of this entry was to use the GPU qwen3.8-27b
+  # *isn't* on, so the two never compete for the same card. GPU0 is otherwise
+  # shared too (bimo's own resident deployment sometimes lives there, see
+  # check_gpu_and_launch.sh's comment) — same cold-start race as GPU1, hence
+  # still routing through ${gpu_check}.
+  qwen3.8-flash-next:
+    cmd: "${gpu_check} serve /data/huggingface/hub/models--Inferact--Qwen3.8-Flash-Next-NVFP4/snapshots/103a7608316173ca6edd49929544244de7ffda70
+      --served-model-name qwen3.8-flash-next
+      --port ${PORT}
+      --trust-remote-code
+      --tensor-parallel-size 1
+      --gpu-memory-utilization 0.95
+      --max-model-len 262144
+      --max-num-seqs 8
+      --cpu-offload-gb 100
+      --cpu-offload-params ngram_embedding
+      --offload-backend uva
+      --kv-transfer-config '{\"kv_connector\":\"OffloadingConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"cpu_bytes_to_use\":34359738368,\"blocks_per_chunk\":4}}'
+      --enable-auto-tool-choice
+      --tool-call-parser qwen3_coder
+      --reasoning-parser qwen3"
+    env:
+      - "CUDA_VISIBLE_DEVICES=0"
+      - "GPU_INDEX=0"
+      - "UTILIZATION_PCT=95"
+      # NOT expandable_segments:True — incompatible with the
+      # OffloadingConnector above (vLLM rejects the combination outright at
+      # config-validation time). See the README section this points to.
+    checkEndpoint: /health
+    ttl: 1800
