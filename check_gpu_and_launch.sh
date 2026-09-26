@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Pre-flight check, then exec into vLLM — runs as llama-swap's actual launched
-# process for any model wired through the ${gpu_check} macro in
-# llama-swap-config.yaml (currently qwen3.8-27b on GPU1, qwen3.8-flash-next
-# on GPU0 — see that file's env: blocks for GPU_INDEX/UTILIZATION_PCT).
+# Pre-flight check, then exec into vLLM. Since 2026-09-26 this is called by
+# pick_gpu_and_launch.sh (llama-swap's actual ${gpu_check} macro target) as
+# a final fit-recheck on whichever GPU that script already picked and
+# locked, rather than being called directly from llama-swap-config.yaml —
+# see that script for why (dynamic GPU picking replaced a fixed
+# CUDA_VISIBLE_DEVICES per model). Still usable standalone (GPU_INDEX/
+# UTILIZATION_PCT env vars, defaults below) for manual testing.
 #
 # Both GPUs on bfg are otherwise-shared (see README.md): GPU1 runs other
 # people's transient jobs, GPU0 runs bimo's own always-resident deployment.
@@ -20,12 +23,10 @@
 set -euo pipefail
 
 # Which physical GPU to check/launch on — 0 or 1, both RTX PRO 6000 Blackwell
-# on bfg with identical VRAM, so TOTAL_MIB below doesn't need to vary by index.
-# Set via the GPU_INDEX env var (llama-swap-config.yaml's ${gpu_index} macro
-# feeds this through the model's env: block); defaults to 1 for anyone calling
-# this script directly. GPU0 also runs bimo's own always-resident deployment
-# (port 9132, unrelated to this repo) — switching here means racing that
-# resident process for headroom instead of GPU1's transient shared jobs.
+# on bfg with identical VRAM, so TOTAL_MIB below doesn't need to vary by
+# index. Normally set by pick_gpu_and_launch.sh (already picked and locked
+# this GPU before delegating here); defaults to 1 for anyone calling this
+# script directly without going through that picker.
 GPU_INDEX="${GPU_INDEX:-1}"
 TOTAL_MIB=97887          # RTX PRO 6000 Blackwell on bfg — see nvidia-smi
 # Must match the model's own --gpu-memory-utilization (as a whole-number

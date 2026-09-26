@@ -21,6 +21,8 @@ Makefile                 Generic targets, all take MODEL=<name>
 run_bench_sweep.sh        Depth sweep (spec vs nospec), takes MODEL as $1.
 run_bench_concurrency.sh  Concurrency sweep (spec vs nospec), takes MODEL as $1.
 sonnet.txt                Shared benchmark dataset (vllm bench's "sonnet" format).
+pick_gpu_and_launch.sh    Picks a free GPU at launch time (see below), then
+                          delegates to check_gpu_and_launch.sh.
 check_gpu_and_launch.sh   GPU-fit gate used by llama-swap-config.yaml (see below).
 llama-swap-config.yaml    Dynamic-loading config for the llama-swap gateway.
 llama-swap                Downloaded llama-swap binary (gitignored).
@@ -37,10 +39,10 @@ llama-swap                Downloaded llama-swap binary (gitignored).
    typically the live path** — check `make status` or `ss -ltnp | grep 12000`
    before assuming nothing is running.
 
-Currently only `qwen3.8-27b` has a live `llama-swap-config.yaml` entry.
-`qwen3.8-flash-next` is scaffolded under `models/` but deliberately left
-commented out there — see `models/qwen3.8-flash-next/README.md` for what's
-still unvalidated before it should be wired in.
+Both `qwen3.8-27b` and `qwen3.8-flash-next` have live `llama-swap-config.yaml`
+entries (the latter added 2026-09-26 — see `models/qwen3.8-flash-next/
+README.md`'s "2026-09-26: validated working config" for the investigation
+behind its flags).
 
 Note there's an existing, pre-existing discrepancy worth knowing about: the
 manual `models/qwen3.8-27b/serve.sh` still points at the `unsloth` NVFP4
@@ -58,9 +60,10 @@ that in mind if you use it for anything beyond quick local benchmarking.
    architecture/quantization).
 2. `make serve MODEL=<name>` / `make bench MODEL=<name>` to exercise it
    manually before touching `llama-swap-config.yaml`.
-3. Only once validated, add a real entry to `llama-swap-config.yaml`
-   (there's a commented-out scaffold there for `qwen3.8-flash-next` showing
-   the shape) and restart llama-swap to pick it up.
+3. Only once validated, add a real entry to `llama-swap-config.yaml` (see
+   `qwen3.8-flash-next`'s entry for the shape — route `cmd:` through
+   `${gpu_check}` and set `UTILIZATION_PCT` in `env:` to match your
+   `--gpu-memory-utilization`) and restart llama-swap to pick it up.
 
 ## Safety notes
 
@@ -69,15 +72,14 @@ that in mind if you use it for anything beyond quick local benchmarking.
   one this Makefile started. On this box that also matches llama-swap's own
   dynamically-launched backend. Don't run `make stop`/`make restart`/the
   bench scripts while a llama-swap-managed model is serving real traffic.
-- `check_gpu_and_launch.sh` refuses to start a model if the target GPU
-  doesn't have enough free memory (currently sized for `qwen3.8-27b`'s 85%
-  utilization) — see that script's comments for why (shared-GPU cold-start
-  race).
-- Which GPU the llama-swap-managed `qwen3.8-27b` runs on is a single switch:
-  `llama-swap-config.yaml`'s `macros.gpu_index` ("0" or "1", default "1"),
-  fed through to both `CUDA_VISIBLE_DEVICES` and `check_gpu_and_launch.sh`'s
-  fit-check. Edit that value and restart llama-swap (or run it with
-  `-watch-config`) to switch cards. GPU1 is bfg's general shared GPU; GPU0
-  also runs bimo's own always-resident `qwen3.8-27b` deployment (port 9132,
-  unrelated to this repo), so switching to GPU0 means racing that resident
-  process for headroom instead of GPU1's transient jobs.
+- Neither llama-swap-managed model is pinned to a GPU. `pick_gpu_and_launch.sh`
+  (llama-swap's `${gpu_check}` macro target) picks whichever of GPU0/GPU1
+  actually has enough free memory at launch time — using a per-GPU `flock`
+  held for the vLLM process's whole lifetime, so two near-simultaneous
+  cold-starts can't race onto the same card — then delegates to
+  `check_gpu_and_launch.sh` for a final fit-recheck before it execs into
+  vllm. Both scripts refuse to start (fast, clean failure) rather than load
+  and crash into whatever's already using a GPU (shared-GPU cold-start
+  race) — GPU1 is bfg's general shared GPU; GPU0 also runs bimo's own
+  always-resident `qwen3.8-27b` deployment (port 9132, unrelated to this
+  repo).

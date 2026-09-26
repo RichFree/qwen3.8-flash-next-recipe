@@ -1,31 +1,33 @@
 # llama-swap config for bfg — deployed to ~/Projects/03_experiments/qwen3.8_hosting/
 # (see deploy/bfg_llama_swap/README.md for the why and the cutover checklist).
 #
-# bfg serves two models, each a plain vLLM deployment, one per GPU (see
-# ../../README.md's "Remote and LAN backends"): qwen3.8-27b on GPU1,
-# qwen3.8-flash-next on GPU0 (added 2026-09-26 after validating it manually —
-# see models/qwen3.8-flash-next/README.md's "2026-09-26: validated working
-# config" for the full investigation behind its flags). Unlike spark1's
-# llama-server instances, vLLM has no in-place unload/reload — the process
-# either holds the weights or it doesn't. So "dynamic" here means llama-swap
-# starts the whole vLLM process on first request and kills it after an idle
-# ttl, same mechanism spark1 already uses, just wrapping `vllm serve` instead
-# of `llama-server`.
+# bfg serves two models, each a plain vLLM deployment (see ../../README.md's
+# "Remote and LAN backends"): qwen3.8-27b and qwen3.8-flash-next (the latter
+# added 2026-09-26 after validating it manually — see models/
+# qwen3.8-flash-next/README.md's "2026-09-26: validated working config" for
+# the full investigation behind its flags). Neither is pinned to a specific
+# GPU — see ${gpu_check} below. Unlike spark1's llama-server instances, vLLM
+# has no in-place unload/reload — the process either holds the weights or it
+# doesn't. So "dynamic" here means llama-swap starts the whole vLLM process
+# on first request and kills it after an idle ttl, same mechanism spark1
+# already uses, just wrapping `vllm serve` instead of `llama-server`.
 #
-# No groups/exclusivity needed between the two — they run on separate GPUs,
-# so there's no shared-resource contention forcing one to unload the other.
-# bfg is deliberately concurrency-focused (each model sized to hold many
-# in-flight KV caches) rather than a multi-model swap host like spark1.
+# No groups/exclusivity needed between the two — neither is pinned to a
+# specific GPU (see ${gpu_check} below), so there's no shared-resource
+# contention forcing one to unload the other. bfg is deliberately
+# concurrency-focused (each model sized to hold many in-flight KV caches)
+# rather than a multi-model swap host like spark1.
 #
-# Whichever GPU this model lands on (CUDA_VISIBLE_DEVICES=${gpu_index} below,
-# set by the gpu_index macro above — "1" by default) is otherwise shared.
-# Since spinning down is the whole point of this change, there's a real
-# window where someone else's job (a training run, say, or on GPU0 bimo's own
-# resident deployment reclaiming headroom) claims the GPU's now-free memory
-# before the next request tries to reload us. cmd: below points at
-# check_gpu_and_launch.sh rather than vllm directly — it refuses to start
-# (and the request fails fast) if the target GPU can't actually fit the
-# model, instead of loading anyway and crashing into whatever's running there.
+# Both GPUs are otherwise shared (GPU1: other people's transient jobs; GPU0:
+# bimo's own resident deployment sometimes lives there). Since spinning down
+# is the whole point of this change, there's a real window where someone
+# else's job claims a GPU's now-free memory before the next request tries to
+# reload us. cmd: below points at pick_gpu_and_launch.sh, not vllm directly —
+# it picks whichever candidate GPU actually has room (see that script; it
+# replaced a per-model fixed CUDA_VISIBLE_DEVICES on 2026-09-26, after that
+# fixed-assignment approach caused a real collision risk — see its own
+# comment for the history) and refuses to start at all if neither does,
+# instead of loading anyway and crashing into whatever's running there.
 
 # NOT 12001 — that's bfg-probe.service's port (deploy/bfg_probe/), a fixed
 # assignment unrelated to this config. Learned the hard way: llama-swap
@@ -48,28 +50,16 @@ logToStdout: "both"
 healthCheckTimeout: 600
 
 macros:
-  # check_gpu_and_launch.sh refuses to start vLLM at all if the target GPU
-  # doesn't have enough free memory to fit it — see that script and the
-  # README's "GPU-fit gate" section. It execs into the real vllm binary once
-  # the check passes, so it's a transparent stand-in for calling vllm directly.
-  gpu_check: /home/richard/Projects/03_experiments/qwen3.8_hosting/check_gpu_and_launch.sh
-
-  # Which physical GPU hosts qwen3.8-27b — "0" or "1" (see README's "2x RTX
-  # PRO 6000 Blackwell" note). To switch GPUs: edit this value and restart
-  # llama-swap (or run it with -watch-config). Feeds both CUDA_VISIBLE_DEVICES
-  # (below) and check_gpu_and_launch.sh's GPU_INDEX (via that same env var),
-  # so the fit-check and the actual launch always agree on which card.
-  # GPU1 is bfg's general shared GPU (other people's transient jobs); GPU0
-  # also runs bimo's own always-resident qwen3.8-27b deployment (port 9132,
-  # unrelated to this repo) — picking GPU0 means racing that resident process
-  # for headroom instead of GPU1's transient jobs.
-  # TEMPORARY 2026-09-26: switched to "0" because GPU1 is currently held by
-  # someone else's job (dipa's training run, ~28GB) and doesn't have enough
-  # free memory for qwen3.8-27b's 85% threshold. NOTE: qwen3.8-flash-next's
-  # entry below is hardcoded to GPU0 (not this macro) — while this is "0",
-  # the two models target the SAME GPU and will collide if both are
-  # triggered. Switch back to "1" once GPU1 frees up.
-  gpu_index: "0"
+  # pick_gpu_and_launch.sh (2026-09-26+) picks whichever candidate GPU (0 or
+  # 1, both RTX PRO 6000 Blackwell) actually has enough free memory at launch
+  # time — see that script for the full why (it replaced a fixed
+  # CUDA_VISIBLE_DEVICES per model, which had a real collision risk once more
+  # than one model could land on the same GPU) — then delegates to
+  # check_gpu_and_launch.sh for a final fit-recheck + the actual exec into
+  # vllm. Both models below route through this same macro; neither is pinned
+  # to a specific GPU anymore, so there's nothing to edit here to "switch"
+  # one — it's automatic every time a model cold-starts.
+  gpu_check: /home/richard/Projects/03_experiments/qwen3.8_hosting/pick_gpu_and_launch.sh
 
 models:
   qwen3.8-27b:
@@ -85,8 +75,8 @@ models:
     # before trusting this unattended. See README checklist.
     #
     # ${gpu_check} stands in for the vllm binary itself (see macro above) —
-    # it exec's into vllm after confirming the target GPU can actually fit
-    # the model, so the args below are identical to calling vllm directly.
+    # it picks a GPU with room and exec's into vllm once confirmed, so the
+    # args below are identical to calling vllm directly.
     #
     # Switched 2026-09-23 from the unsloth NVFP4 checkpoint to this FP8 one,
     # with --kv-cache-dtype fp8 explicit below. The NVFP4 checkpoint (no
@@ -123,16 +113,10 @@ models:
       --reasoning-parser qwen3
       --speculative-config '{\"method\": \"dflash\", \"model\": \"/data/huggingface/hub/models--incoai--Qwen3.8-27B-DFlash2/snapshots/dedf8df68adfb1afeaf7b7480c0a0243108177b4\", \"num_speculative_tokens\": 7}'"
     env:
-      # TEMPORARY 2026-09-26: hardcoded to "0", bypassing the ${gpu_index}
-      # macro — that macro is NOT being substituted into these env: values
-      # right now (confirmed via check_gpu_and_launch.sh debug trace: it
-      # received the literal unresolved string "${gpu_index}", which made
-      # nvidia-smi -i "${gpu_index}" fail instantly). Root cause not yet
-      # found — the macro substitutes fine elsewhere in this same file
-      # (${gpu_check}, ${PORT}). Revert to "${gpu_index}" once that's fixed;
-      # until then, edit these two lines directly to switch GPUs.
-      - "CUDA_VISIBLE_DEVICES=0"
-      - "GPU_INDEX=0"
+      # No CUDA_VISIBLE_DEVICES/GPU_INDEX here anymore — pick_gpu_and_launch.sh
+      # sets both dynamically before delegating to check_gpu_and_launch.sh.
+      # UTILIZATION_PCT is the one thing that must still be declared per
+      # model (matches --gpu-memory-utilization above; both scripts read it).
       - "UTILIZATION_PCT=85"
       - "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
     checkEndpoint: /health
@@ -150,12 +134,8 @@ models:
   # speculative decoding is deliberately NOT enabled). Mirrors
   # models/qwen3.8-flash-next/serve.sh — keep the two in sync.
   #
-  # Fixed to GPU0 (not the switchable ${gpu_index} macro qwen3.8-27b uses
-  # above) — the whole point of this entry was to use the GPU qwen3.8-27b
-  # *isn't* on, so the two never compete for the same card. GPU0 is otherwise
-  # shared too (bimo's own resident deployment sometimes lives there, see
-  # check_gpu_and_launch.sh's comment) — same cold-start race as GPU1, hence
-  # still routing through ${gpu_check}.
+  # Not pinned to a GPU — ${gpu_check} (pick_gpu_and_launch.sh) picks
+  # whichever of GPU0/GPU1 has room at launch time, same as qwen3.8-27b.
   qwen3.8-flash-next:
     cmd: "${gpu_check} serve /data/huggingface/hub/models--Inferact--Qwen3.8-Flash-Next-NVFP4/snapshots/103a7608316173ca6edd49929544244de7ffda70
       --served-model-name qwen3.8-flash-next
@@ -173,11 +153,10 @@ models:
       --tool-call-parser qwen3_coder
       --reasoning-parser qwen3"
     env:
-      - "CUDA_VISIBLE_DEVICES=0"
-      - "GPU_INDEX=0"
+      # No CUDA_VISIBLE_DEVICES/GPU_INDEX here — pick_gpu_and_launch.sh sets
+      # both dynamically. NOT expandable_segments:True — incompatible with
+      # the OffloadingConnector above (vLLM rejects the combination outright
+      # at config-validation time). See the README section this points to.
       - "UTILIZATION_PCT=95"
-      # NOT expandable_segments:True — incompatible with the
-      # OffloadingConnector above (vLLM rejects the combination outright at
-      # config-validation time). See the README section this points to.
     checkEndpoint: /health
     ttl: 1800
