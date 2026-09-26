@@ -69,6 +69,15 @@ that in mind if you use it for anything beyond quick local benchmarking.
   one this Makefile started. On this box that also matches llama-swap's own
   dynamically-launched backend. Don't run `make stop`/`make restart`/the
   bench scripts while a llama-swap-managed model is serving real traffic.
-- `check_gpu_and_launch.sh` refuses to start a model if GPU1 doesn't have
-  enough free memory (currently sized for `qwen3.8-27b`'s 85% utilization) —
-  see that script's comments for why (shared-GPU cold-start race).
+- `check_gpu_and_launch.sh` refuses to start a model if the target GPU
+  doesn't have enough free memory (currently sized for `qwen3.8-27b`'s 85%
+  utilization) — see that script's comments for why (shared-GPU cold-start
+  race).
+- Which GPU the llama-swap-managed `qwen3.8-27b` runs on is a single switch:
+  `llama-swap-config.yaml`'s `macros.gpu_index` ("0" or "1", default "1"),
+  fed through to both `CUDA_VISIBLE_DEVICES` and `check_gpu_and_launch.sh`'s
+  fit-check. Edit that value and restart llama-swap (or run it with
+  `-watch-config`) to switch cards. GPU1 is bfg's general shared GPU; GPU0
+  also runs bimo's own always-resident `qwen3.8-27b` deployment (port 9132,
+  unrelated to this repo), so switching to GPU0 means racing that resident
+  process for headroom instead of GPU1's transient jobs.

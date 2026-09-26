@@ -12,13 +12,15 @@
 # bfg is deliberately concurrency-focused (one model, sized to hold many
 # in-flight KV caches) rather than a multi-model swap host like spark1.
 #
-# GPU1 (where this model lives — CUDA_VISIBLE_DEVICES=1 below) is otherwise
-# shared. Since spinning down is the whole point of this change, there's a
-# real window where someone else's job (a training run, say) claims GPU1's
-# now-free memory before the next request tries to reload us. cmd: below
-# points at check_gpu_and_launch.sh rather than vllm directly — it refuses to
-# start (and the request fails fast) if GPU1 can't actually fit the model,
-# instead of loading anyway and crashing into whatever's running there.
+# Whichever GPU this model lands on (CUDA_VISIBLE_DEVICES=${gpu_index} below,
+# set by the gpu_index macro above — "1" by default) is otherwise shared.
+# Since spinning down is the whole point of this change, there's a real
+# window where someone else's job (a training run, say, or on GPU0 bimo's own
+# resident deployment reclaiming headroom) claims the GPU's now-free memory
+# before the next request tries to reload us. cmd: below points at
+# check_gpu_and_launch.sh rather than vllm directly — it refuses to start
+# (and the request fails fast) if the target GPU can't actually fit the
+# model, instead of loading anyway and crashing into whatever's running there.
 
 # NOT 12001 — that's bfg-probe.service's port (deploy/bfg_probe/), a fixed
 # assignment unrelated to this config. Learned the hard way: llama-swap
@@ -37,11 +39,22 @@ logToStdout: "both"
 healthCheckTimeout: 600
 
 macros:
-  # check_gpu_and_launch.sh refuses to start vLLM at all if GPU1 doesn't have
-  # enough free memory to fit it — see that script and the README's "GPU-fit
-  # gate" section. It execs into the real vllm binary once the check passes,
-  # so it's a transparent stand-in for calling vllm directly.
+  # check_gpu_and_launch.sh refuses to start vLLM at all if the target GPU
+  # doesn't have enough free memory to fit it — see that script and the
+  # README's "GPU-fit gate" section. It execs into the real vllm binary once
+  # the check passes, so it's a transparent stand-in for calling vllm directly.
   gpu_check: /home/richard/Projects/03_experiments/qwen3.8_hosting/check_gpu_and_launch.sh
+
+  # Which physical GPU hosts qwen3.8-27b — "0" or "1" (see README's "2x RTX
+  # PRO 6000 Blackwell" note). To switch GPUs: edit this value and restart
+  # llama-swap (or run it with -watch-config). Feeds both CUDA_VISIBLE_DEVICES
+  # (below) and check_gpu_and_launch.sh's GPU_INDEX (via that same env var),
+  # so the fit-check and the actual launch always agree on which card.
+  # GPU1 is bfg's general shared GPU (other people's transient jobs); GPU0
+  # also runs bimo's own always-resident qwen3.8-27b deployment (port 9132,
+  # unrelated to this repo) — picking GPU0 means racing that resident process
+  # for headroom instead of GPU1's transient jobs.
+  gpu_index: "1"
 
 models:
   qwen3.8-27b:
@@ -57,8 +70,8 @@ models:
     # before trusting this unattended. See README checklist.
     #
     # ${gpu_check} stands in for the vllm binary itself (see macro above) —
-    # it exec's into vllm after confirming GPU1 can actually fit the model,
-    # so the args below are identical to calling vllm directly.
+    # it exec's into vllm after confirming the target GPU can actually fit
+    # the model, so the args below are identical to calling vllm directly.
     #
     # Switched 2026-09-23 from the unsloth NVFP4 checkpoint to this FP8 one,
     # with --kv-cache-dtype fp8 explicit below. The NVFP4 checkpoint (no
@@ -95,10 +108,11 @@ models:
       --reasoning-parser qwen3
       --speculative-config '{\"method\": \"dflash\", \"model\": \"/data/huggingface/hub/models--incoai--Qwen3.8-27B-DFlash2/snapshots/dedf8df68adfb1afeaf7b7480c0a0243108177b4\", \"num_speculative_tokens\": 7}'"
     env:
-      - "CUDA_VISIBLE_DEVICES=1"
+      - "CUDA_VISIBLE_DEVICES=${gpu_index}"
+      - "GPU_INDEX=${gpu_index}"
       - "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
     checkEndpoint: /health
-    # Idle time before llama-swap kills the process and frees GPU1's ~85GB.
+    # Idle time before llama-swap kills the process and frees the target GPU's ~85GB.
     # Placeholder — trades off against the cold-start cost above; tune once
     # that's measured and usage patterns are known. Shared GPU box (bimo and
     # others also run jobs on it), so freeing VRAM when idle is the whole

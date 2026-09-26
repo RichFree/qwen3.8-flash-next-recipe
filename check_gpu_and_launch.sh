@@ -2,21 +2,29 @@
 # Pre-flight check, then exec into vLLM — runs as llama-swap's actual launched
 # process for qwen3.8-27b (see ../config.yaml's ${gpu_check} macro).
 #
-# GPU1 is otherwise-shared (bfg runs other people's jobs — see README.md).
+# Both GPUs on bfg are otherwise-shared (see README.md): GPU1 runs other
+# people's transient jobs, GPU0 runs bimo's own always-resident deployment.
 # qwen3.8-27b only spins down (ttl-idle) and back up because of this dynamic
 # setup, which opens a window where another job (e.g. a training run) can
-# claim GPU1's now-free memory before the next request tries to reload us. If
-# that happens, loading anyway means either an ugly vLLM CUDA-OOM crash mid
-# weight-load or forcibly starving whatever's already running there. Refuse
-# to start instead — the request fails fast and cleanly, and GPU1 is left
-# alone for whoever's using it.
+# claim the target GPU's now-free memory before the next request tries to
+# reload us. If that happens, loading anyway means either an ugly vLLM
+# CUDA-OOM crash mid weight-load or forcibly starving whatever's already
+# running there. Refuse to start instead — the request fails fast and
+# cleanly, and the GPU is left alone for whoever's using it.
 #
 # `exec`, not a subshell call — this script's PID becomes vLLM's PID, keeping
 # the property config.yaml's comments rely on: llama-swap's SIGTERM (sent to
 # only this one PID, no process-group kill) lands on vLLM itself.
 set -euo pipefail
 
-GPU_INDEX=1
+# Which physical GPU to check/launch on — 0 or 1, both RTX PRO 6000 Blackwell
+# on bfg with identical VRAM, so TOTAL_MIB below doesn't need to vary by index.
+# Set via the GPU_INDEX env var (llama-swap-config.yaml's ${gpu_index} macro
+# feeds this through the model's env: block); defaults to 1 for anyone calling
+# this script directly. GPU0 also runs bimo's own always-resident deployment
+# (port 9132, unrelated to this repo) — switching here means racing that
+# resident process for headroom instead of GPU1's transient shared jobs.
+GPU_INDEX="${GPU_INDEX:-1}"
 TOTAL_MIB=97887          # RTX PRO 6000 Blackwell on bfg — see nvidia-smi
 UTILIZATION=0.85         # keep in sync with --gpu-memory-utilization below
 REQUIRED_MIB=$(( TOTAL_MIB * 85 / 100 ))
