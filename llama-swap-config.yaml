@@ -125,7 +125,7 @@ models:
     # that's measured and usage patterns are known. Shared GPU box (bimo and
     # others also run jobs on it), so freeing VRAM when idle is the whole
     # point — but not so aggressively that normal usage gaps cause thrashing.
-    ttl: 1800
+    ttl: 600
 
   # Validated 2026-09-26 — see models/qwen3.8-flash-next/README.md's
   # "2026-09-26: validated working config" section for the full investigation
@@ -159,4 +159,4 @@ models:
       # at config-validation time). See the README section this points to.
       - "UTILIZATION_PCT=95"
     checkEndpoint: /health
-    ttl: 1800
+    ttl: 600
