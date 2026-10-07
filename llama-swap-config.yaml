@@ -12,11 +12,17 @@
 # on first request and kills it after an idle ttl, same mechanism spark1
 # already uses, just wrapping `vllm serve` instead of `llama-server`.
 #
-# No groups/exclusivity needed between the two — neither is pinned to a
-# specific GPU (see ${gpu_check} below), so there's no shared-resource
-# contention forcing one to unload the other. bfg is deliberately
-# concurrency-focused (each model sized to hold many in-flight KV caches)
-# rather than a multi-model swap host like spark1.
+# CORRECTED 2026-10-07: exclusivity is NOT inferred from contention — it is llama-swap's
+# DEFAULT and it is unconditional. With no `groups:`/`matrix:` declared, every model is
+# silently placed in a synthetic "(default)" group with Swap:true/Exclusive:true
+# (proxy/config/config.go AddDefaultGroupToConfig), and ProcessGroup.ProxyRequest then calls
+# Stop() on whatever the single `lastUsedProcess` slot points at (proxy/processgroup.go:63).
+# That is what caused the thrash: a request for the other model killed the one that was
+# still cold-starting (Stop() only waits for *in-flight requests* to drain — a loading model
+# has none), so neither ever reached ready. llama-swap never inspects GPUs at all, so it
+# happily destroyed a model that already owned its own card while the other card sat idle.
+# See groups: below and CLAUDE.md. bfg is deliberately concurrency-focused (each model sized
+# to hold many in-flight KV caches), one model per GPU, not a swap host like spark1.
 #
 # Both GPUs are otherwise shared (GPU1: other people's transient jobs; GPU0:
 # bimo's own resident deployment sometimes lives there). Since spinning down
@@ -60,6 +66,26 @@ macros:
   # to a specific GPU anymore, so there's nothing to edit here to "switch"
   # one — it's automatic every time a model cold-starts.
   gpu_check: /home/richard/Projects/03_experiments/qwen3.8_hosting/pick_gpu_and_launch.sh
+
+# Both models MUST share one non-swapping group, otherwise llama-swap keeps them in the
+# exclusive swap-mode "(default)" group and they evict each other (see the note above).
+# swap:false is NOT the default — GroupConfig.UnmarshalYAML defaults swap:true and
+# exclusive:true, so both lines must stay explicit or the old behaviour silently returns.
+#
+# This does NOT make llama-swap memory-aware. It only permits co-residence; whether two
+# models may physically share the box is still decided per-launch by ${gpu_check}
+# (pick_gpu_and_launch.sh: non-blocking per-GPU flock + free-VRAM check, and it refuses to
+# start rather than collide). With --gpu-memory-utilization 0.85/0.95 on 97887 MiB cards the
+# ceiling is exactly one model per GPU, so 2 resident is the max and it needs both GPUs
+# genuinely free. If they can't both fit, the loser exits 1 and that request errors — a clean
+# refusal instead of a mutual kill.
+groups:
+  bfg:
+    swap: false
+    exclusive: false
+    members:
+      - qwen3.8-27b
+      - qwen3.8-flash-next
 
 models:
   qwen3.8-27b:
