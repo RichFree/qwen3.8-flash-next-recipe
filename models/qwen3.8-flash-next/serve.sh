@@ -1,32 +1,47 @@
 #!/usr/bin/env bash
+# Serves qwen3.8-flash-next with vLLM. Run by deploy/bfg-flash-next.service
+# (always-on), or by hand via `make serve-fg`.
+#
+# Validated 2026-09-26 — see README.md's "2026-09-26: validated working
+# config" for why each flag is here (nightly vLLM, the two separate CPU
+# offloads, --max-num-seqs instead of --max-model-len, no MTP) and
+# bench_results/ for the numbers.
 set -euo pipefail
 
-# Validated 2026-09-26 on GPU0 — see README.md's "2026-09-26: validated
-# working config" section for the full investigation (why nightly vLLM, why
-# these specific offload flags, why CUDA graphs needed --max-num-seqs
-# dropped, why MTP speculative decoding was tried and rejected) and
-# bench_results/ for the numbers. This is also the config running live under
-# llama-swap-config.yaml's qwen3.8-flash-next entry; keep the two in sync.
-if [ -z "${ALLOW_UNVALIDATED:-}" ]; then
-  echo "models/qwen3.8-flash-next/serve.sh is validated but still marked" \
-       "manual-only — read README.md, then re-run with ALLOW_UNVALIDATED=1." >&2
-  exit 1
-fi
-
 cd "$(dirname "$0")/../.."
-source .venv/bin/activate
 source models/qwen3.8-flash-next/model.env
 
-# GPU0, not GPU1 — GPU1 is bfg's shared GPU and (dynamically) hosts
-# qwen3.8-27b via llama-swap. GPU0 is otherwise shared too (see README's GPU0
-# caveat about bimo's own resident deployment sometimes living there) — check
-# nvidia-smi -i 0 yourself before running this manually; unlike the
-# llama-swap path, this script does not gate on GPU fit.
-export CUDA_VISIBLE_DEVICES=0
-# NOT expandable_segments:True (unlike qwen3.8-27b's env) — incompatible with
-# --kv-transfer-config's OffloadingConnector (vLLM rejects it at startup).
+# Which physical GPU. Both bfg cards are shared with other jobs; override with
+# CUDA_VISIBLE_DEVICES=1 (or the unit's Environment=) to move the model.
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+TOTAL_MIB=97887          # RTX PRO 6000 Blackwell — see nvidia-smi
+UTILIZATION_PCT=95       # must match --gpu-memory-utilization below
+REQUIRED_MIB=$(( TOTAL_MIB * UTILIZATION_PCT / 100 ))
 
-vllm serve "$MODEL_PATH" \
+# CUDA toolchain env — mirrors ~/.zshrc. This is the actual fix for the
+# FlashInfer JIT failures seen when vLLM was launched without an interactive
+# shell (systemd): /usr/local/cuda (13.1) matches closely enough to what
+# PyTorch was built against (13.0). The venv's bundled nvcc (cu13, 13.3) on
+# PATH is worse — "CUDA compiler and CUDA toolkit headers are incompatible".
+export CUDA_HOME=/usr/local/cuda
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+export TORCH_CUDA_ARCH_LIST="12.1"
+# NOT PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True — vLLM rejects it
+# together with the OffloadingConnector below.
+
+# Refuse to start rather than load onto a card another job is using: loading
+# anyway means a CUDA-OOM crash mid weight-load or starving that job.
+FREE_MIB=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$CUDA_VISIBLE_DEVICES")
+if (( FREE_MIB < REQUIRED_MIB )); then
+    echo "REFUSING TO START: GPU${CUDA_VISIBLE_DEVICES} has only ${FREE_MIB} MiB free" \
+         "(need ~${REQUIRED_MIB} MiB for --gpu-memory-utilization 0.${UTILIZATION_PCT})." \
+         "Another job is using it — see nvidia-smi." >&2
+    exit 1
+fi
+
+# exec: this PID becomes vLLM's, so systemd's SIGTERM lands on vLLM itself.
+exec .venv/bin/vllm serve "$MODEL_PATH" \
   --served-model-name "$MODEL_NAME" \
   --port "$PORT" \
   --trust-remote-code \

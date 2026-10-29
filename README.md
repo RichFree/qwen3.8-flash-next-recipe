@@ -1,85 +1,56 @@
 # qwen3.8_hosting
 
-vLLM hosting scripts and benchmarks for Qwen3.8-family models on `bfg`
-(2x RTX PRO 6000 Blackwell, ~98GB each; GPU1 is shared with other jobs).
+Always-on vLLM hosting for `qwen3.8-flash-next` (`Inferact/Qwen3.8-Flash-Next-NVFP4`)
+on `bfg` (2x RTX PRO 6000 Blackwell, ~98GB each; both cards are shared with other
+jobs). Model notes and the investigation behind the flags live in
+`models/qwen3.8-flash-next/README.md`.
 
 ## Layout
 
 ```
-models/<name>/          One directory per model variant.
-  model.env               MODEL_NAME, PORT, MODEL_PATH — sourced by serve.sh,
-                           serve_nospec.sh, and the root bench scripts.
-  serve.sh                Manual foreground/background launch, spec-decode.
-  serve_nospec.sh          Same, without speculative decoding (A/B baseline).
-  bench_results/           vllm bench serve output (json + log per run).
-  bench_report.html        Rendered benchmark comparison, if generated.
-  README.md                Model-specific notes, only where something is
-                           non-obvious or unvalidated (see qwen3.8-flash-next/).
-
-Makefile                 Generic targets, all take MODEL=<name>
-                          (default: qwen3.8-27b). See `make help`.
-run_bench_sweep.sh        Depth sweep (spec vs nospec), takes MODEL as $1.
-run_bench_concurrency.sh  Concurrency sweep (spec vs nospec), takes MODEL as $1.
-sonnet.txt                Shared benchmark dataset (vllm bench's "sonnet" format).
-pick_gpu_and_launch.sh    Picks a free GPU at launch time (see below), then
-                          delegates to check_gpu_and_launch.sh.
-check_gpu_and_launch.sh   GPU-fit gate used by llama-swap-config.yaml (see below).
-llama-swap-config.yaml    Dynamic-loading config for the llama-swap gateway.
-llama-swap                Downloaded llama-swap binary (gitignored).
-.venv/                    Shared Python venv for all models (gitignored).
+models/qwen3.8-flash-next/
+  model.env               MODEL_NAME, PORT (8000), MODEL_PATH.
+  serve.sh                The launch: GPU free-memory check, CUDA env, exec vllm serve.
+  bench_results/          vllm bench serve output (json + log per run).
+  README.md               Validated config, what was tried and rejected, open items.
+deploy/bfg-flash-next.service   systemd user unit template (`make install` renders it).
+Makefile                  install/start/stop/status/logs/call/bench. See `make help`.
+run_bench.sh              Depth / concurrency sweeps against the running server.
+sonnet.txt                Benchmark dataset (vllm bench's "sonnet" format).
+venv-snapshots/           pip freezes taken around the nightly-vLLM upgrade.
+.venv/                    Python venv (gitignored).
 ```
 
-## Two serving paths
+## Running it
 
-1. **Manual** (`make serve` / `serve.sh`, port from each model's `model.env`):
-   for local dev and benchmarking. Only one model runs at a time.
-2. **llama-swap** (`llama-swap-config.yaml`, port 12000): a gateway that
-   cold-starts a model's vLLM process on first request and stops it after an
-   idle TTL, to free GPU1 for other jobs on the shared box. **This is
-   typically the live path** — check `make status` or `ss -ltnp | grep 12000`
-   before assuming nothing is running.
+```bash
+make install     # render deploy/bfg-flash-next.service into ~/.config/systemd/user
+make start       # cold start takes ~3-4 minutes
+make status      # service state, /health, served model
+make logs
+systemctl --user enable bfg-flash-next.service   # optional: start on login/boot
+```
 
-Both `qwen3.8-27b` and `qwen3.8-flash-next` have live `llama-swap-config.yaml`
-entries (the latter added 2026-09-26 — see `models/qwen3.8-flash-next/
-README.md`'s "2026-09-26: validated working config" for the investigation
-behind its flags).
+vLLM listens on its default `:8000`. It holds ~93 GB on one GPU and ~132 GB of host
+RAM whenever it is up; there is no idle unload.
 
-Note there's an existing, pre-existing discrepancy worth knowing about: the
-manual `models/qwen3.8-27b/serve.sh` still points at the `unsloth` NVFP4
-checkpoint, while `llama-swap-config.yaml`'s live entry was switched to a
-different (FP8) checkpoint to work around a hardware-specific FlashInfer bug
-(NVFP4 KV cache + masked multi-token verify on SM120) — see the comments in
-`llama-swap-config.yaml`. The manual script was not updated to match; keep
-that in mind if you use it for anything beyond quick local benchmarking.
+### Cutover from llama-swap
 
-## Adding a new model variant
+- **The gateway's tunnel still ends at `:12000`** (where llama-swap listened), not
+  `:8000`. Until the tunnel (or a local forward) targets `:8000`, gateway requests for
+  `qwen3.8-flash-next-bfg` will fail. That tunnel is set up outside this account.
+- `bfg-llama-swap.service` must be stopped (and disabled): it also wants a whole GPU.
+- Check `:8000` is free first (`ss -tlnp | grep :8000`); something else was bound to
+  it when this was written.
 
-1. `mkdir models/<name>` and add `model.env` (`MODEL_NAME`, `PORT`,
-   `MODEL_PATH`), `serve.sh`, `serve_nospec.sh` (copy an existing model's as
-   a starting point, then fix the flags for the new checkpoint's actual
-   architecture/quantization).
-2. `make serve MODEL=<name>` / `make bench MODEL=<name>` to exercise it
-   manually before touching `llama-swap-config.yaml`.
-3. Only once validated, add a real entry to `llama-swap-config.yaml` (see
-   `qwen3.8-flash-next`'s entry for the shape — route `cmd:` through
-   `${gpu_check}` and set `UTILIZATION_PCT` in `env:` to match your
-   `--gpu-memory-utilization`) and restart llama-swap to pick it up.
+## Notes
 
-## Safety notes
-
-- `make stop` (and the bench scripts' internal `stop_server`) kill **any**
-  `vllm serve` / `VLLM::EngineCore` process by pattern match, not just the
-  one this Makefile started. On this box that also matches llama-swap's own
-  dynamically-launched backend. Don't run `make stop`/`make restart`/the
-  bench scripts while a llama-swap-managed model is serving real traffic.
-- Neither llama-swap-managed model is pinned to a GPU. `pick_gpu_and_launch.sh`
-  (llama-swap's `${gpu_check}` macro target) picks whichever of GPU0/GPU1
-  actually has enough free memory at launch time — using a per-GPU `flock`
-  held for the vLLM process's whole lifetime, so two near-simultaneous
-  cold-starts can't race onto the same card — then delegates to
-  `check_gpu_and_launch.sh` for a final fit-recheck before it execs into
-  vllm. Both scripts refuse to start (fast, clean failure) rather than load
-  and crash into whatever's already using a GPU (shared-GPU cold-start
-  race) — GPU1 is bfg's general shared GPU; GPU0 also runs bimo's own
-  always-resident `qwen3.8-27b` deployment (port 9132, unrelated to this
-  repo).
+- **GPU choice is fixed, not dynamic.** `serve.sh` uses GPU0 (override with
+  `Environment=CUDA_VISIBLE_DEVICES=1` in the unit, or in the shell for `serve-fg`).
+  At `--gpu-memory-utilization 0.95` the card must be essentially empty; if it isn't,
+  `serve.sh` exits 1 with `REFUSING TO START` rather than crash into another job, and
+  the unit retries every 60 s.
+- **Host RAM matters as much as VRAM**: `--cpu-offload-gb 100` + 32 GiB KV offload on a
+  502 GB shared box.
+- `make stop` stops the whole cgroup, which includes `VLLM::EngineCore`.
+- `make serve-fg` is for debugging; stop the service first (same port, same GPU).

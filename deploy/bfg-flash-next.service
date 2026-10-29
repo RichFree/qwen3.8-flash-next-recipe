@@ -1,0 +1,20 @@
+# Always-on qwen3.8-flash-next. `make install` renders @REPO@ and writes it to
+# ~/.config/systemd/user/. Replaces bfg-llama-swap.service; vLLM listens on :8000 (see model.env).
+[Unit]
+Description=qwen3.8-flash-next (vLLM)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/models/qwen3.8-flash-next/serve.sh
+# Pin a GPU here (serve.sh defaults to 0):
+#Environment=CUDA_VISIBLE_DEVICES=1
+# A "REFUSING TO START" exit (GPU busy) retries once a minute instead of spinning.
+Restart=on-failure
+RestartSec=60
+# Cold start is ~3-4 min; stopping tears down VLLM::EngineCore via the cgroup.
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

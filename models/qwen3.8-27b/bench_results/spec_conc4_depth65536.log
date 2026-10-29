@@ -1,58 +1,0 @@
-Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7c488591b600>, trust_remote_code=False, seed=42, num_prompts=8, dataset_name='sonnet', no_stream=False, dataset_path='./sonnet.txt', no_oversample=False, skip_chat_template=False, enable_multimodal_chat=False, disable_shuffle=False, custom_output_len=256, custom_ensure_client_side_data=False, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=65536, sonnet_output_len=256, sonnet_prefix_len=200, sharegpt_output_len=None, timed_trace_chunk_hash_size=16, timed_trace_sec_multiplier=1, timed_trace_label_timestamp='timestamp', timed_trace_label_input_length='input_length', timed_trace_label_output_length='output_length', timed_trace_label_hash_ids='hash_ids', blazedit_min_distance=0.0, blazedit_max_distance=1.0, asr_max_audio_len_sec=inf, asr_min_audio_len_sec=0.0, random_input_len=1024, random_output_len=128, random_range_ratio='0.0', random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, bfcl_categories=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, speed_bench_dataset_subset='qualitative', speed_bench_output_len=4096, speed_bench_category=None, label='spec', backend='openai', base_url=None, host='127.0.0.1', port=12000, endpoint='/v1/completions', header=None, max_concurrency=4, model='qwen3.8-27b', input_len=None, output_len=None, tokenizer='/data/huggingface/hub/models--unsloth--Qwen3.8-27B-NVFP4/snapshots/57926baca9a82b4d6906b43f2750d55315f5b10f', tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, probe_request_rate=0.0, disable_tqdm=False, num_warmups=1, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir='./bench_results', result_filename='spec_conc4_depth65536.json', ignore_eos=True, self_timed=None, percentile_metrics='ttft,tpot,itl', metric_percentiles='50,90,99', goodput=None, request_id_prefix='bench-2adfd7c8-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, lora_assignment='random', ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, chat_template_kwargs=None, extra_body=None, skip_tokenizer_init=False, insecure=False, plot_timeline=False, timeline_itl_thresholds='25,50', plot_dataset_stats=False)
-WARNING: vllm bench serve no longer sets temperature==0 (greedy) in requests by default. The default will be determined on the server side and can be model/API specific. For the old behavior, include --temperature=0.
-Starting initial single prompt test run...
-Skipping endpoint ready check.
-Warming up with 1 requests...
-  0%|          | 0/1 [00:00<?, ?it/s]100%|██████████| 1/1 [00:03<00:00,  3.09s/it]100%|██████████| 1/1 [00:03<00:00,  3.09s/it]
-Warmup run completed.
-Starting main benchmark run...
-Traffic request rate: inf
-Burstiness factor: 1.0 (Poisson process)
-Maximum request concurrency: 4
-  0%|          | 0/8 [00:00<?, ?it/s] 12%|█▎        | 1/8 [00:05<00:40,  5.81s/it] 25%|██▌       | 2/8 [00:09<00:27,  4.63s/it] 38%|███▊      | 3/8 [00:10<00:15,  3.05s/it] 50%|█████     | 4/8 [00:21<00:23,  5.88s/it] 62%|██████▎   | 5/8 [00:57<00:50, 16.87s/it] 75%|███████▌  | 6/8 [00:57<00:22, 11.19s/it] 88%|████████▊ | 7/8 [00:57<00:07,  7.65s/it]100%|██████████| 8/8 [00:58<00:00,  5.28s/it]100%|██████████| 8/8 [00:58<00:00,  7.26s/it]
-tip: install termplotlib and gnuplot to plot the metrics
-============ Serving Benchmark Result ============
-Successful requests:                     8         
-Failed requests:                         0         
-Maximum request concurrency:             4         
-Benchmark duration (s):                  58.09     
-Total input tokens:                      523542    
-Total generated tokens:                  2048      
-Request throughput (req/s):              0.14      
-Output token throughput (tok/s):         35.26     
-Peak output token throughput (tok/s):    112.00    
-Peak concurrent requests:                5.00      
-Total token throughput (tok/s):          9048.53   
----------------Time to First Token----------------
-Mean TTFT (ms):                          14565.24  
-Median TTFT (ms):                        8669.62   
-P50 TTFT (ms):                           8669.62   
-P90 TTFT (ms):                           33518.44  
-P99 TTFT (ms):                           33991.69  
------Time per Output Token (excl. 1st token)------
-Mean TPOT (ms):                          56.04     
-Median TPOT (ms):                        42.07     
-P50 TPOT (ms):                           42.07     
-P90 TPOT (ms):                           112.66    
-P99 TPOT (ms):                           143.07    
----------------Inter-token Latency----------------
-Mean ITL (ms):                           161.02    
-Median ITL (ms):                         35.30     
-P50 ITL (ms):                            35.30     
-P90 ITL (ms):                            790.92    
-P99 ITL (ms):                            1554.00   
----------------Speculative Decoding---------------
-Acceptance rate (%):                     27.00     
-Acceptance length:                       2.89      
-Drafts:                                  710       
-Draft tokens:                            4970      
-Accepted tokens:                         1342      
-Per-position acceptance (%):
-  Position 0:                            68.03     
-  Position 1:                            43.10     
-  Position 2:                            28.73     
-  Position 3:                            19.72     
-  Position 4:                            13.80     
-  Position 5:                            9.44      
-  Position 6:                            6.20      
-==================================================

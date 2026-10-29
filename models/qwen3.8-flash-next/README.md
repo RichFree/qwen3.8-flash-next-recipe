@@ -3,19 +3,17 @@
 Checkpoint: `Inferact/Qwen3.8-Flash-Next-NVFP4`
 (`/data/huggingface/hub/models--Inferact--Qwen3.8-Flash-Next-NVFP4`)
 
-This is **not** another quantization of the `qwen3.8-27b` model already hosted
-in this repo — it's a different architecture entirely (`Qwen4ExpForConditionalGeneration`,
+This is **not** another quantization of the `qwen3.8-27b` model (previously hosted
+in this repo, removed on the `flash-next-only` branch) — it's a different architecture entirely (`Qwen4ExpForConditionalGeneration`,
 `model_type: qwen4_exp`): a preview of the Qwen4 line with hybrid linear
 (Gated DeltaNet) + full (Qwen Sparse) attention, MoE, a built-in multi-token
 prediction (MTP) head for speculative decoding, and vision input support.
 125B total / 6B activated params, plus a 95.37GiB n-gram "PLE" embedding
 table — roughly 4-5x the footprint of `qwen3.8-27b` on the same hardware.
 
-**Status: validated and live.** Runs on GPU0 under `llama-swap-config.yaml`
-(dynamic, same cold-start/idle-TTL model as `qwen3.8-27b`), and manually via
-`serve.sh` / `serve_nospec.sh` (`make serve MODEL=qwen3.8-flash-next
-ALLOW_UNVALIDATED=1` — still gated since the tool-call/reasoning parsers
-below are unverified, not because the model itself is in question).
+**Status: validated and live.** Runs always-on as `bfg-flash-next.service`
+(`make install && make start`), launched by `serve.sh` on port 8000.
+Tool-call/reasoning parsers are still unverified (see "Still open" below).
 
 ## 2026-09-26: validated working config
 
