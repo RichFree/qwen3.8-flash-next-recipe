@@ -21,6 +21,32 @@ venv-snapshots/           pip freezes taken around the nightly-vLLM upgrade.
 .venv/                    Python venv (gitignored).
 ```
 
+## Setup (from scratch)
+
+Needs: a GPU with ~93 GB free (RTX PRO 6000 Blackwell class), ~132 GB free host RAM,
+CUDA toolkit at `/usr/local/cuda` (13.1 — `serve.sh` uses it for FlashInfer's JIT; the
+venv's bundled nvcc breaks it), `uv`, and systemd user services.
+
+1. **venv with nightly vLLM.** Stable 0.29/0.30 cannot offload the 95 GiB embedding table;
+   only the nightly can.
+   ```bash
+   uv venv .venv --python 3.12
+   uv pip install --python .venv/bin/python -U vllm --torch-backend=auto \
+     --extra-index-url https://wheels.vllm.ai/nightly
+   ```
+   Validated against vLLM `0.30.1rc1.dev186` + torch `2.13.0+cu130`; the exact pins are in
+   `venv-snapshots/requirements-2026-09-26-vllm0.30.1rc1-nightly.txt`. Installing from that
+   file reproduces them more reliably than the moving nightly index.
+2. **Weights.**
+   ```bash
+   hf download Inferact/Qwen3.8-Flash-Next-NVFP4
+   ```
+   Then set `MODEL_PATH` in `models/qwen3.8-flash-next/model.env` to the snapshot directory
+   (it is hardcoded to `/data/huggingface/hub/...` for this box).
+3. Check `PORT` in `model.env` and the GPU (`serve.sh` defaults to GPU0;
+   `CUDA_VISIBLE_DEVICES=1` overrides), then smoke-test with `make serve-fg` before
+   installing the service below.
+
 ## Running it
 
 ```bash
