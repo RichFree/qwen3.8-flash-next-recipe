@@ -10,6 +10,8 @@ WorkingDirectory=@REPO@
 ExecStart=@REPO@/models/qwen3.8-flash-next/serve.sh
 # Pin a GPU here (serve.sh defaults to 0):
 #Environment=CUDA_VISIBLE_DEVICES=1
+# V2 model runner is on by default in serve.sh; uncomment to disable:
+#Environment=VLLM_USE_V2_MODEL_RUNNER=0
 # A "REFUSING TO START" exit (GPU busy) retries once a minute instead of spinning.
 Restart=on-failure
 RestartSec=60

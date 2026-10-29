@@ -112,5 +112,5 @@ Direct-to-vLLM is available for isolating gateway vs backend problems: a second 
   default group is `swap: true, exclusive: true` and stops the other model unconditionally —
   including one still cold-starting. Declare `swap: false, exclusive: false`.
 - No `expandable_segments` (vLLM rejects it with the OffloadingConnector).
-- `VLLM_USE_V2_MODEL_RUNNER=1` was set in the llama-swap config in the live checkout
-  (uncommitted) but is **not** in `serve.sh` here, and has not been benchmarked.
+- `VLLM_USE_V2_MODEL_RUNNER` defaults to `1` in `serve.sh` (matching the old llama-swap config);
+  set it to `0` to disable. `bench_results/` predate it, so its effect is unmeasured.

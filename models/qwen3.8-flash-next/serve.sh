@@ -27,6 +27,10 @@ export CUDA_HOME=/usr/local/cuda
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 export TORCH_CUDA_ARCH_LIST="12.1"
+# vLLM's V2 model runner, as in the live llama-swap config. On by default;
+# `VLLM_USE_V2_MODEL_RUNNER=0` (shell, or Environment= in the unit) turns it off.
+# Not yet benchmarked against bench_results/ (those predate it).
+export VLLM_USE_V2_MODEL_RUNNER="${VLLM_USE_V2_MODEL_RUNNER:-1}"
 # NOT PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True — vLLM rejects it
 # together with the OffloadingConnector below.
 
