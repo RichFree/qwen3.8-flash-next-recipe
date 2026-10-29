@@ -17,7 +17,7 @@ PROMPT   ?= hi
 PORT     := $(shell sed -n 's/^PORT=//p' models/$(MODEL)/model.env)
 URL      := http://127.0.0.1:$(PORT)
 
-.PHONY: help install start stop restart status logs call serve-fg bench bench-concurrency
+.PHONY: help docker-build docker-run install start stop restart status logs call serve-fg bench bench-concurrency
 
 help:
 	@echo "  make install            render deploy/$(SERVICE) into $(UNIT_DIR)"
@@ -26,8 +26,32 @@ help:
 	@echo "  make logs               tail -f the service journal"
 	@echo "  make call [PROMPT=...]  send a test chat request to $(URL)"
 	@echo "  make serve-fg           run serve.sh in the foreground (stop the service first)"
+	@echo "  make docker-build|docker-run   image build / run on DOCKER_GPU=$(DOCKER_GPU) at :$(DOCKER_PORT)"
 	@echo "  make bench              prefill/decode depth sweep against the running server"
 	@echo "  make bench-concurrency  concurrency (2/4) sweep against the running server"
+
+# --- Docker (see docs/docker-image.md) ---
+IMAGE      ?= qwen3.8-flash-next:vllm0.32
+DOCKER_GPU ?= 1
+DOCKER_PORT ?= 8002
+# One persistent dir for every cache that otherwise lives in the container's
+# throwaway layer: FlashInfer JIT kernels (HOME/.cache/flashinfer), vLLM's
+# torch.compile + autotune caches (VLLM_CACHE_ROOT), triton. Runs as the host
+# user so nothing in it ends up root-owned.
+DOCKER_CACHE ?= $(HOME)/.cache/flash-next-docker
+
+docker-build:
+	docker build -t $(IMAGE) .
+
+docker-run:
+	mkdir -p $(DOCKER_CACHE)
+	docker run --rm --name flash-next-gpu$(DOCKER_GPU) \
+	  --user $$(id -u):$$(id -g) \
+	  --device nvidia.com/gpu=$(DOCKER_GPU) --ipc=host --ulimit memlock=-1:-1 \
+	  -v /data/huggingface:/data/huggingface:ro \
+	  -v $(DOCKER_CACHE):/cache \
+	  -e HOME=/cache -e VLLM_CACHE_ROOT=/cache/vllm -e TRITON_CACHE_DIR=/cache/triton \
+	  -p $(DOCKER_PORT):8000 $(IMAGE)
 
 install:
 	mkdir -p $(UNIT_DIR)
