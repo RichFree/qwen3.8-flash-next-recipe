@@ -1,0 +1,3 @@
+*
+!models/qwen3.8-flash-next/serve.sh
+!models/qwen3.8-flash-next/model.env

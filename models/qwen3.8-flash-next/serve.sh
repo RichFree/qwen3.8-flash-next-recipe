@@ -45,7 +45,7 @@ if (( FREE_MIB < REQUIRED_MIB )); then
 fi
 
 # exec: this PID becomes vLLM's, so systemd's SIGTERM lands on vLLM itself.
-exec .venv/bin/vllm serve "$MODEL_PATH" \
+exec "${VLLM_BIN:-.venv/bin/vllm}" serve "$MODEL_PATH" \
   --served-model-name "$MODEL_NAME" \
   --port "$PORT" \
   --trust-remote-code \
