@@ -1,9 +1,8 @@
 # qwen3.8_hosting
 
 Always-on vLLM hosting for `qwen3.8-flash-next` (`Inferact/Qwen3.8-Flash-Next-NVFP4`)
-on `bfg` (2x RTX PRO 6000 Blackwell, ~98GB each; both cards are shared with other
-jobs). Model notes and the investigation behind the flags live in
-`models/qwen3.8-flash-next/README.md`.
+on RTX PRO 6000 Blackwell server. Model notes and the investigation behind
+the flags live in `models/qwen3.8-flash-next/README.md`.
 
 ## Layout
 
