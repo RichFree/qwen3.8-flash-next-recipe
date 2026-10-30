@@ -4,3 +4,6 @@
 
 # Ephemeral server run logs (regenerated on every start/restart)
 *.log
+
+# Session handoff notes (local only)
+handoff.md

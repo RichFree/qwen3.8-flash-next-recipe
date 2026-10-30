@@ -34,6 +34,9 @@ help:
 IMAGE      ?= qwen3.8-flash-next:vllm0.32
 DOCKER_GPU ?= 1
 DOCKER_PORT ?= 8002
+# Host dir holding the weights, mounted read-only at the SAME path in the container.
+# Set it (and MODEL_PATH, which must lie under it) to serve weights from elsewhere.
+DOCKER_MODELS ?= /data/huggingface
 # One persistent dir for every cache that otherwise lives in the container's
 # throwaway layer: FlashInfer JIT kernels (HOME/.cache/flashinfer), vLLM's
 # torch.compile + autotune caches (VLLM_CACHE_ROOT), triton. Runs as the host
@@ -48,7 +51,8 @@ docker-run:
 	docker run --rm --name flash-next-gpu$(DOCKER_GPU) \
 	  --user $$(id -u):$$(id -g) \
 	  --device nvidia.com/gpu=$(DOCKER_GPU) --ipc=host --ulimit memlock=-1:-1 \
-	  -v /data/huggingface:/data/huggingface:ro \
+	  -v $(DOCKER_MODELS):$(DOCKER_MODELS):ro \
+	  $(if $(MODEL_PATH),-e MODEL_PATH=$(MODEL_PATH)) \
 	  -v $(DOCKER_CACHE):/cache \
 	  -e HOME=/cache -e VLLM_CACHE_ROOT=/cache/vllm -e TRITON_CACHE_DIR=/cache/triton \
 	  -p $(DOCKER_PORT):8000 $(IMAGE)

@@ -60,14 +60,83 @@ systemctl --user enable bfg-flash-next.service   # optional: start on login/boot
 vLLM listens on its default `:8000`. It holds ~93 GB on one GPU and ~132 GB of host
 RAM whenever it is up; there is no idle unload.
 
-### Cutover from llama-swap
+### Gateway tunnel
 
-- **The gateway's tunnel still ends at `:12000`** (where llama-swap listened), not
-  `:8000`. Until the tunnel (or a local forward) targets `:8000`, gateway requests for
-  `qwen3.8-flash-next-bfg` will fail. That tunnel is set up outside this account.
-- `bfg-llama-swap.service` must be stopped (and disabled): it also wants a whole GPU.
+- **The gateway's tunnel must target `:8000`** (vLLM's port). If it still lands on a
+  different local port, gateway requests for `qwen3.8-flash-next-bfg` will fail. That
+  tunnel is set up outside this account.
 - Check `:8000` is free first (`ss -tlnp | grep :8000`); something else was bound to
   it when this was written.
+
+## Docker image
+
+The same server can run from a container built on stable vLLM 0.32.0 (weights are mounted,
+not baked in):
+
+```bash
+make docker-build
+make docker-run [DOCKER_GPU=1] [DOCKER_PORT=8002]
+```
+
+See `docs/docker-image.md` for how the image is built, the toolchain packages it needs, the
+JIT cache mount, and the results of the first GPU run.
+
+## Configuration
+
+### Model path
+
+`serve.sh` loads `MODEL_PATH` from `models/qwen3.8-flash-next/model.env`, which only supplies
+a default (`${MODEL_PATH:-...}`), so an environment variable wins. It must point at a
+**local snapshot directory** (the one containing `config.json` and the safetensors), e.g. the
+output of `hf download Inferact/Qwen3.8-Flash-Next-NVFP4`:
+
+- **Permanently:** edit the default in `model.env`.
+- **One run (host):** `MODEL_PATH=/path/to/snapshot make serve-fg`
+- **systemd unit:** add `Environment=MODEL_PATH=/path/to/snapshot` to
+  `deploy/bfg-flash-next.service` (then `make install && make restart`).
+- **Docker:** `make docker-run DOCKER_MODELS=/my/models MODEL_PATH=/my/models/qwen3.8-flash-next`.
+  `DOCKER_MODELS` is mounted read-only at the same path in the container (default
+  `/data/huggingface`), and `MODEL_PATH` (which must be under it) is passed through as `-e`.
+  The image sets `HF_HUB_OFFLINE=1`, so a Hugging Face repo id will not be downloaded
+  at start; use a local path.
+
+### Options
+
+Environment variables read by `serve.sh` / `model.env` (set them in the shell, in the unit
+with `Environment=`, or with `docker run -e`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MODEL_PATH` | snapshot under `/data/huggingface/hub/...` | Weights directory (see above). |
+| `PORT` | `8000` | Port vLLM listens on. In Docker leave it at 8000 and remap with `-p HOST:8000`. |
+| `CUDA_VISIBLE_DEVICES` | `0` | Which physical GPU to use. `serve.sh` also checks that GPU for free memory. |
+| `VLLM_USE_V2_MODEL_RUNNER` | `1` | Set `0` to use vLLM's V1 model runner. |
+| `VLLM_BIN` | `.venv/bin/vllm` | vLLM executable (the image sets `/opt/venv/bin/vllm`). |
+
+Make variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DOCKER_GPU` | `1` | GPU index passed into the container (it sees it as GPU 0). |
+| `DOCKER_PORT` | `8002` | Host port mapped to the container's `8000`. |
+| `DOCKER_MODELS` | `/data/huggingface` | Host dir with the weights, mounted read-only at the same path. |
+| `DOCKER_CACHE` | `~/.cache/flash-next-docker` | Host dir for FlashInfer/triton/vLLM JIT caches. |
+| `IMAGE` | `qwen3.8-flash-next:vllm0.32` | Image tag built and run. |
+
+`MODEL_NAME` (`qwen3.8-flash-next`, the served model name clients request) is set in
+`model.env` as a fixed value, not an overridable default.
+
+**Fixed in `serve.sh`** — edit the script to change these (there is no argument
+passthrough). The values were validated together; see `models/qwen3.8-flash-next/README.md`
+before changing them:
+
+- `--gpu-memory-utilization 0.95`. If you change it, also change `UTILIZATION_PCT`
+  (free-memory check), and `TOTAL_MIB` if the GPU is not a 97887 MiB card.
+- `--max-model-len 262144`, `--max-num-seqs 8`
+- `--cpu-offload-gb 100` with `--cpu-offload-params ngram_embedding` (uva backend) and a
+  32 GiB (`cpu_bytes_to_use`) KV offload. These set the host-RAM requirement.
+- `--tensor-parallel-size 1`
+- Tool calling (`qwen3_coder` parser) and reasoning (`qwen3` parser)
 
 ## Notes
 

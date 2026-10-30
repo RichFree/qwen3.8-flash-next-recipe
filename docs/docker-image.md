@@ -134,10 +134,33 @@ After the first successful start it held about 178 MB:
 The FlashInfer cache directory is keyed by FlashInfer version (`0.7.0.post1` here), so the
 host's existing `~/.cache/flashinfer/0.7.0` is not reused.
 
+## Sharing the image as a tarball
+
+The image is ~19.6 GB and does not contain the weights (recipients need those separately; see
+the README's "Model path" section).
+
+Export (on the build machine):
+
+```bash
+docker save qwen3.8-flash-next:vllm0.32 | zstd -T0 > flash-next-vllm0.32.tar.zst
+# without zstd: docker save -o flash-next-vllm0.32.tar qwen3.8-flash-next:vllm0.32
+```
+
+Load (on the receiving machine, which needs Docker only; no registry or network):
+
+```bash
+zstd -dc flash-next-vllm0.32.tar.zst | docker load
+# plain tar: docker load -i flash-next-vllm0.32.tar
+docker images qwen3.8-flash-next          # confirm the tag is there
+```
+
+`docker load` restores the original tag, so `make docker-run` works unchanged. Transfer the file
+with `scp`/`rsync` or a shared drive. To share through a registry instead, tag and
+`docker push`, then run with `make docker-run IMAGE=<registry>/<name>:<tag>`.
+
 ## Results of the first run (2026-10-29)
 
-Run on **GPU 0**, not GPU 1: GPU 1 had a transient ~29 GB job on it at the time, and GPU 0 was
-freed deliberately for the test.
+Run on **GPU 0**
 
 - **Started and served.** `/health` → 200; a chat completion returned `pong` with
   `system_fingerprint: vllm-0.32.0-…` — i.e. stable 0.32.0, not the nightly.
